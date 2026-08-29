@@ -3,6 +3,7 @@ import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  base: '/smart-shopping/',
   plugins: [
     react(),
     VitePWA({
@@ -11,7 +12,6 @@ export default defineConfig({
       includeAssets: ['favicon.svg', 'icons/icon-192.png', 'icons/icon-512.png'],
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
-        navigateFallback: '/index.html',
       },
     }),
   ],
