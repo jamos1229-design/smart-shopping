@@ -9,19 +9,22 @@ import type { InputPriceType, PriceRecord, PriceType, Product } from '../types';
 interface PriceFormModalProps {
   product: Product;
   onClose: () => void;
+  editingRecord?: PriceRecord;
 }
 
-export function PriceFormModal({ product, onClose }: PriceFormModalProps) {
+export function PriceFormModal({ product, onClose, editingRecord }: PriceFormModalProps) {
   const { stores, taxRates, userSettings, savePriceRecord } = useAppData();
-  const [storeId, setStoreId] = useState(stores[0]?.storeId ?? '');
-  const [inputPrice, setInputPrice] = useState('');
-  const [inputPriceType, setInputPriceType] = useState<InputPriceType>('tax_included');
-  const [actualPrice, setActualPrice] = useState('');
-  const [confirmedDate, setConfirmedDate] = useState(todayISODate());
-  const [priceType, setPriceType] = useState<PriceType>('regular');
-  const [saleStart, setSaleStart] = useState('');
-  const [saleEnd, setSaleEnd] = useState('');
-  const [memo, setMemo] = useState('');
+  const [storeId, setStoreId] = useState(editingRecord?.storeId ?? stores[0]?.storeId ?? '');
+  const [inputPrice, setInputPrice] = useState(editingRecord ? String(editingRecord.inputPrice) : '');
+  const [inputPriceType, setInputPriceType] = useState<InputPriceType>(editingRecord?.inputPriceType ?? 'tax_included');
+  const [actualPrice, setActualPrice] = useState(
+    editingRecord?.actualTaxIncludedPrice != null ? String(editingRecord.actualTaxIncludedPrice) : '',
+  );
+  const [confirmedDate, setConfirmedDate] = useState(editingRecord?.confirmedDate ?? todayISODate());
+  const [priceType, setPriceType] = useState<PriceType>(editingRecord?.priceType ?? 'regular');
+  const [saleStart, setSaleStart] = useState(editingRecord?.saleStartDate ?? '');
+  const [saleEnd, setSaleEnd] = useState(editingRecord?.saleEndDate ?? '');
+  const [memo, setMemo] = useState(editingRecord?.memo ?? '');
 
   const preview = useMemo(() => {
     const price = Number(inputPrice);
@@ -40,7 +43,7 @@ export function PriceFormModal({ product, onClose }: PriceFormModalProps) {
   function handleSave() {
     if (!storeId || !preview) return;
     const record: PriceRecord = {
-      priceRecordId: generateId(),
+      priceRecordId: editingRecord?.priceRecordId ?? generateId(),
       productId: product.productId,
       storeId,
       inputPrice: Number(inputPrice),
@@ -57,14 +60,14 @@ export function PriceFormModal({ product, onClose }: PriceFormModalProps) {
       saleStartDate: priceType === 'sale' && saleStart ? saleStart : null,
       saleEndDate: priceType === 'sale' && saleEnd ? saleEnd : null,
       memo,
-      createdAt: new Date().toISOString(),
+      createdAt: editingRecord?.createdAt ?? new Date().toISOString(),
     };
     savePriceRecord(record);
     onClose();
   }
 
   return (
-    <Modal title={`価格を登録：${product.name}`} onClose={onClose}>
+    <Modal title={`${editingRecord ? '価格を編集' : '価格を登録'}：${product.name}`} onClose={onClose}>
       {stores.length === 0 ? (
         <p className="muted">先に店舗を登録してください。</p>
       ) : (
@@ -177,7 +180,7 @@ export function PriceFormModal({ product, onClose }: PriceFormModalProps) {
           </div>
 
           <button type="button" className="btn btn-primary" disabled={!preview} onClick={handleSave}>
-            価格を保存する
+            {editingRecord ? '変更を保存する' : '価格を保存する'}
           </button>
         </>
       )}

@@ -7,7 +7,7 @@ import { computeUnitPrice, COMPARISON_UNIT_LABELS } from '../lib/unitPrice';
 import { effectiveTaxIncludedPrice } from '../lib/tax';
 import { formatYen, formatDate } from '../lib/format';
 import { generateId } from '../lib/id';
-import type { Product } from '../types';
+import type { PriceRecord, Product } from '../types';
 
 interface ProductDetailSheetProps {
   productId: string;
@@ -28,6 +28,7 @@ export function ProductDetailSheet({ productId, onClose, onEdit, onDelete }: Pro
     removePriceRecord,
   } = useAppData();
   const [priceFormOpen, setPriceFormOpen] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<PriceRecord | null>(null);
 
   const product = products.find((p) => p.productId === productId);
   const records = useMemo(() => priceRecords.filter((r) => r.productId === productId), [priceRecords, productId]);
@@ -168,9 +169,17 @@ export function ProductDetailSheet({ productId, onClose, onEdit, onDelete }: Pro
                   <button
                     type="button"
                     className="icon-btn"
+                    aria-label="この価格記録を編集"
+                    onClick={() => setEditingRecord(record)}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn"
                     aria-label="この価格記録を削除"
                     onClick={() => {
-                      if (confirm('この価格記録を削除しますか？（入力間違いの訂正用です。過去の税率で正しく登録された記録は残しておくことをおすすめします）')) {
+                      if (confirm('この価格記録を削除しますか？')) {
                         removePriceRecord(record.priceRecordId);
                       }
                     }}
@@ -189,6 +198,9 @@ export function ProductDetailSheet({ productId, onClose, onEdit, onDelete }: Pro
       </button>
 
       {priceFormOpen && <PriceFormModal product={product} onClose={() => setPriceFormOpen(false)} />}
+      {editingRecord && (
+        <PriceFormModal product={product} editingRecord={editingRecord} onClose={() => setEditingRecord(null)} />
+      )}
     </Modal>
   );
 }
