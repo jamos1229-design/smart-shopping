@@ -300,6 +300,9 @@ export function ProductsPage() {
                 </option>
               ))}
             </select>
+            <p className="muted" style={{ marginTop: 4 }}>
+              目安: 食品・飲料（酒類・外食を除く）は軽減税率対象（8%）、日用品・酒類・ペットフード等は標準税率対象（10%）です。同じレシート内でも商品によって税率が異なります。
+            </p>
           </div>
           <div className="field">
             <label>メモ</label>

@@ -17,8 +17,16 @@ interface ProductDetailSheetProps {
 }
 
 export function ProductDetailSheet({ productId, onClose, onEdit, onDelete }: ProductDetailSheetProps) {
-  const { products, categories, stores, priceRecords, favoriteProducts, saveFavoriteProduct, removeFavoriteProduct } =
-    useAppData();
+  const {
+    products,
+    categories,
+    stores,
+    priceRecords,
+    favoriteProducts,
+    saveFavoriteProduct,
+    removeFavoriteProduct,
+    removePriceRecord,
+  } = useAppData();
   const [priceFormOpen, setPriceFormOpen] = useState(false);
 
   const product = products.find((p) => p.productId === productId);
@@ -151,9 +159,25 @@ export function ProductDetailSheet({ productId, onClose, onEdit, onDelete }: Pro
                     {formatDate(record.confirmedDate)}
                     {record.priceType === 'sale' ? ' ・ 特売' : ''}
                     {record.priceKind === 'actual' ? ' ・ 実売価格' : ''}
+                    {' ・ 適用税率'}
+                    {Math.round(record.appliedTaxRate * 100)}%
                   </div>
                 </div>
-                <div style={{ textAlign: 'right' }}>{formatYen(effectiveTaxIncludedPrice(record))}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ textAlign: 'right' }}>{formatYen(effectiveTaxIncludedPrice(record))}</div>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="この価格記録を削除"
+                    onClick={() => {
+                      if (confirm('この価格記録を削除しますか？（入力間違いの訂正用です。過去の税率で正しく登録された記録は残しておくことをおすすめします）')) {
+                        removePriceRecord(record.priceRecordId);
+                      }
+                    }}
+                  >
+                    🗑
+                  </button>
+                </div>
               </div>
             );
           })
