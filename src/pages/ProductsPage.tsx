@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useAppData } from '../state/AppDataContext';
 import { Modal } from '../components/Modal';
 import { ProductDetailSheet } from '../components/ProductDetailSheet';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { generateId } from '../lib/id';
 import type { Category, ComparisonUnit, Product } from '../types';
 import { COMPARISON_UNIT_LABELS } from '../lib/unitPrice';
@@ -185,17 +186,13 @@ export function ProductsPage() {
             />
           </div>
           <div className="field">
-            <label>カテゴリー</label>
-            <select
+            <label>カテゴリー（入力して検索できます）</label>
+            <SearchableSelect
               value={editingProduct.categoryId}
-              onChange={(e) => setEditingProduct({ ...editingProduct, categoryId: e.target.value })}
-            >
-              {categories.map((c) => (
-                <option key={c.categoryId} value={c.categoryId}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+              onChange={(categoryId) => setEditingProduct({ ...editingProduct, categoryId })}
+              placeholder="カテゴリー名で検索"
+              options={categories.map((c) => ({ value: c.categoryId, label: c.name }))}
+            />
           </div>
           <div className="row">
             <div className="field">

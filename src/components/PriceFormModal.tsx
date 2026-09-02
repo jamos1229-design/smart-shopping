@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Modal } from './Modal';
+import { SearchableSelect } from './SearchableSelect';
 import { useAppData } from '../state/AppDataContext';
 import { calculatePriceBreakdown } from '../lib/tax';
 import { formatYen } from '../lib/format';
@@ -73,14 +74,14 @@ export function PriceFormModal({ product, onClose, editingRecord }: PriceFormMod
       ) : (
         <>
           <div className="field">
-            <label>店舗</label>
-            <select value={storeId} onChange={(e) => setStoreId(e.target.value)}>
-              {stores.map((s) => (
-                <option key={s.storeId} value={s.storeId}>
-                  {s.displayName}
-                </option>
-              ))}
-            </select>
+            <label>店舗（入力して検索できます）</label>
+            <SearchableSelect
+              value={storeId}
+              onChange={setStoreId}
+              placeholder="店舗名で検索"
+              emptyMessage="該当する店舗がありません"
+              options={stores.map((s) => ({ value: s.storeId, label: s.displayName }))}
+            />
           </div>
 
           <div className="field">

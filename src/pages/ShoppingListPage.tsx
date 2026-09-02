@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useAppData } from '../state/AppDataContext';
 import { useActiveShoppingList } from '../state/useActiveShoppingList';
 import { Modal } from '../components/Modal';
+import { SearchableSelect } from '../components/SearchableSelect';
 import { generateId, todayISODate } from '../lib/id';
 import type { ItemSelectionType, ShoppingListItem } from '../types';
 
@@ -206,28 +207,30 @@ export function ShoppingListPage() {
 
           {selectionType === 'product' ? (
             <div className="field">
-              <label>商品</label>
-              <select value={productId} onChange={(e) => setProductId(e.target.value)}>
-                <option value="">選択してください</option>
-                {products.map((p) => (
-                  <option key={p.productId} value={p.productId}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
+              <label>商品（入力して検索できます）</label>
+              <SearchableSelect
+                value={productId}
+                onChange={setProductId}
+                placeholder="商品名で検索"
+                emptyMessage="該当する商品がありません"
+                options={products.map((p) => ({
+                  value: p.productId,
+                  label: p.name,
+                  sublabel: categories.find((c) => c.categoryId === p.categoryId)?.name,
+                }))}
+              />
             </div>
           ) : (
             <>
               <div className="field">
-                <label>カテゴリー（何でもいい場合）</label>
-                <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-                  <option value="">選択してください</option>
-                  {categories.map((c) => (
-                    <option key={c.categoryId} value={c.categoryId}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                <label>カテゴリー（何でもいい場合。入力して検索できます）</label>
+                <SearchableSelect
+                  value={categoryId}
+                  onChange={setCategoryId}
+                  placeholder="カテゴリー名で検索"
+                  emptyMessage="該当するカテゴリーがありません"
+                  options={categories.map((c) => ({ value: c.categoryId, label: c.name }))}
+                />
               </div>
               <div className="field">
                 <label>最低容量（任意）</label>
