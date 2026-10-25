@@ -292,5 +292,29 @@ check(
   summaryLowThreshold.recommendation,
 );
 
+// --- JAN code validation & quantity parsing (barcode feature) ---
+{
+  const { isValidJan, canonicalJan, sameJan } = await import('../src/lib/jan');
+  const { parseQuantity } = await import('../src/lib/productLookup');
+  check('valid EAN-13 accepted', isValidJan('4901234567894'));
+  check('EAN-13 with wrong check digit rejected', !isValidJan('4901234567890'));
+  check('valid EAN-8 accepted', isValidJan('49123456'));
+  check('UPC-A canonicalized to EAN-13', canonicalJan('036000291452') === '0036000291452');
+  check('UPC-A and EAN-13 forms compare equal', sameJan('036000291452', '0036000291452'));
+  check('garbage rejected', canonicalJan('abc') === null);
+  const q1 = parseQuantity('1000 ml');
+  check('parse "1000 ml"', q1?.volume === 1000 && q1?.unit === 'ml', q1);
+  const q2 = parseQuantity('900ml');
+  check('parse "900ml"', q2?.volume === 900 && q2?.unit === 'ml', q2);
+  const q3 = parseQuantity('1 L');
+  check('parse "1 L"', q3?.volume === 1 && q3?.unit === 'L', q3);
+  const q4 = parseQuantity('2kg');
+  check('parse "2kg"', q4?.volume === 2 && q4?.unit === 'kg', q4);
+  const q5 = parseQuantity('10個入');
+  check('parse "10個入"', q5?.volume === 10 && q5?.unit === '個', q5);
+  check('unparseable quantity returns null', parseQuantity('大きめ') === null);
+}
+
+
 console.log(`\n${failures === 0 ? 'ALL TESTS PASSED' : `${failures} TEST(S) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

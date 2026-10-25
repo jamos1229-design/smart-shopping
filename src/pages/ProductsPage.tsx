@@ -3,9 +3,12 @@ import { useAppData } from '../state/AppDataContext';
 import { Modal } from '../components/Modal';
 import { ProductDetailSheet } from '../components/ProductDetailSheet';
 import { SearchableSelect } from '../components/SearchableSelect';
+import { BarcodeScanner } from '../components/BarcodeScanner';
 import { generateId } from '../lib/id';
 import type { Category, ComparisonUnit, Product } from '../types';
 import { COMPARISON_UNIT_LABELS } from '../lib/unitPrice';
+import { sameJan } from '../lib/jan';
+import { lookupProductByJan, type ProductLookupResult } from '../lib/productLookup';
 
 function emptyProduct(categoryId: string, taxCategoryId: string): Product {
   return {
@@ -25,6 +28,34 @@ function emptyProduct(categoryId: string, taxCategoryId: string): Product {
   };
 }
 
+const UNIT_TO_COMPARISON: Record<string, ComparisonUnit> = {
+  ml: 'per100ml',
+  L: 'per100ml',
+  g: 'per100g',
+  kg: 'per1kg',
+  個: 'per1piece',
+  本: 'per1piece',
+  袋: 'per1piece',
+  枚: 'per1sheet',
+  ロール: 'per1roll',
+};
+
+/** 外部DBの結果を、空欄の項目にだけ反映する（ユーザーが入力済みの値は上書きしない） */
+function applyLookup(product: Product, result: ProductLookupResult): Product {
+  const next = { ...product };
+  if (!next.name.trim() && result.name) next.name = result.name;
+  if (!next.manufacturer.trim() && result.brand) next.manufacturer = result.brand;
+  if (next.volume === null && result.volume !== null) {
+    next.volume = result.volume;
+    next.volumeUnit = result.volumeUnit || next.volumeUnit;
+    next.comparisonUnit = UNIT_TO_COMPARISON[next.volumeUnit] ?? next.comparisonUnit;
+  }
+  return next;
+}
+
+type ScanMode = 'find' | 'field';
+type LookupNotice = { productId: string; kind: 'loading' | 'found' | 'notfound' } | null;
+
 export function ProductsPage() {
   const { categories, products, taxCategories, saveCategory, removeCategory, saveProduct, removeProduct } =
     useAppData();
@@ -34,6 +65,8 @@ export function ProductsPage() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [detailProductId, setDetailProductId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [scanMode, setScanMode] = useState<ScanMode | null>(null);
+  const [lookupNotice, setLookupNotice] = useState<LookupNotice>(null);
 
   const defaultTaxCategoryId = taxCategories.find((t) => t.code === 'reduced')?.taxCategoryId ?? '';
 
@@ -51,11 +84,66 @@ export function ProductsPage() {
     setCategoryModalOpen(false);
   }
 
+  function findByJan(jan: string, excludeProductId?: string): Product | undefined {
+    return products.find((p) => p.productId !== excludeProductId && p.janCode && sameJan(p.janCode, jan));
+  }
+
+  async function runLookup(productId: string, jan: string) {
+    setLookupNotice({ productId, kind: 'loading' });
+    const result = await lookupProductByJan(jan);
+    setLookupNotice((prev) =>
+      prev && prev.productId === productId ? { productId, kind: result ? 'found' : 'notfound' } : prev,
+    );
+    if (!result) return;
+    setEditingProduct((prev) => (prev && prev.productId === productId && sameJan(prev.janCode, jan) ? applyLookup(prev, result) : prev));
+  }
+
+  function handleScanned(jan: string) {
+    const mode = scanMode;
+    setScanMode(null);
+
+    if (mode === 'field') {
+      if (!editingProduct) return;
+      const updated = { ...editingProduct, janCode: jan };
+      setEditingProduct(updated);
+      if (!findByJan(jan, updated.productId)) runLookup(updated.productId, jan);
+      return;
+    }
+
+    // 「バーコードで探す」：登録済みなら商品詳細（価格登録）へ、未登録なら新規追加へ
+    const existing = findByJan(jan);
+    if (existing) {
+      setDetailProductId(existing.productId);
+      return;
+    }
+    if (categories.length === 0) {
+      alert('この商品はまだ登録されていません。先にカテゴリーを追加してください。');
+      return;
+    }
+    const fresh = {
+      ...emptyProduct(categoryFilter !== 'all' ? categoryFilter : (categories[0]?.categoryId ?? ''), defaultTaxCategoryId),
+      janCode: jan,
+    };
+    setEditingProduct(fresh);
+    runLookup(fresh.productId, jan);
+  }
+
+  function closeProductForm() {
+    setEditingProduct(null);
+    setLookupNotice(null);
+  }
+
   function handleSaveProduct() {
     if (!editingProduct || !editingProduct.name.trim() || !editingProduct.categoryId) return;
+    const duplicate = editingProduct.janCode ? findByJan(editingProduct.janCode, editingProduct.productId) : undefined;
+    if (duplicate && !confirm(`このJANコードは「${duplicate.name}」で登録済みです。それでも保存しますか？`)) return;
     saveProduct(editingProduct);
-    setEditingProduct(null);
+    closeProductForm();
   }
+
+  const editingDuplicate =
+    editingProduct?.janCode ? findByJan(editingProduct.janCode, editingProduct.productId) : undefined;
+  const notice = lookupNotice && editingProduct && lookupNotice.productId === editingProduct.productId ? lookupNotice : null;
 
   return (
     <div>
@@ -143,6 +231,14 @@ export function ProductsPage() {
 
           <button
             type="button"
+            className="btn btn-secondary"
+            style={{ marginBottom: 10 }}
+            onClick={() => setScanMode('find')}
+          >
+            📷 バーコードで探す・追加
+          </button>
+          <button
+            type="button"
             className="btn btn-primary"
             disabled={categories.length === 0}
             onClick={() => setEditingProduct(emptyProduct(categories[0]?.categoryId ?? '', defaultTaxCategoryId))}
@@ -173,8 +269,19 @@ export function ProductsPage() {
       {editingProduct && (
         <Modal
           title={products.some((p) => p.productId === editingProduct.productId) ? '商品を編集' : '商品を追加'}
-          onClose={() => setEditingProduct(null)}
+          onClose={closeProductForm}
         >
+          {notice?.kind === 'loading' && <div className="notice notice-warn">商品データベースを検索しています…</div>}
+          {notice?.kind === 'found' && (
+            <div className="notice notice-good">
+              商品データベースから自動入力しました。商品名・容量が正しいか確認してください。
+            </div>
+          )}
+          {notice?.kind === 'notfound' && (
+            <div className="notice notice-warn">
+              商品データベースに見つかりませんでした。商品名などを入力してください。次からはこのバーコードで呼び出せます。
+            </div>
+          )}
           <div className="field">
             <label>正式商品名</label>
             <input
@@ -279,11 +386,29 @@ export function ProductsPage() {
           </div>
           <div className="field">
             <label>JANコード（任意）</label>
-            <input
-              type="text"
-              value={editingProduct.janCode}
-              onChange={(e) => setEditingProduct({ ...editingProduct, janCode: e.target.value })}
-            />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                type="tel"
+                inputMode="numeric"
+                value={editingProduct.janCode}
+                onChange={(e) => setEditingProduct({ ...editingProduct, janCode: e.target.value })}
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="バーコードを読み取る"
+                style={{ width: 46, height: 46 }}
+                onClick={() => setScanMode('field')}
+              >
+                📷
+              </button>
+            </div>
+            {editingDuplicate && (
+              <p className="muted" style={{ color: 'var(--warn)', marginTop: 4 }}>
+                このJANコードは「{editingDuplicate.name}」で登録済みです。
+              </p>
+            )}
           </div>
           <div className="field">
             <label>税区分</label>
@@ -312,6 +437,14 @@ export function ProductsPage() {
             保存する
           </button>
         </Modal>
+      )}
+
+      {scanMode && (
+        <BarcodeScanner
+          title={scanMode === 'field' ? 'JANコードを読み取る' : 'バーコードで探す・追加'}
+          onDetected={handleScanned}
+          onClose={() => setScanMode(null)}
+        />
       )}
 
       {detailProductId && (
