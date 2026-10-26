@@ -131,7 +131,7 @@ export function ProductsPage() {
         const db = lastPriceDateByProduct.get(b.p.productId) ?? '';
         if (da !== db) return da < db ? 1 : -1;
       }
-      return a.p.name.localeCompare(b.p.name, 'ja');
+      return a.p.name.localeCompare(b.p.name, 'ja', { numeric: true });
     });
     return list.map(({ p }) => p);
   }, [products, categoryFilter, favoritesOnly, favoriteIds, query, sortKey, lastPriceDateByProduct, categoryNameById]);
@@ -239,23 +239,40 @@ export function ProductsPage() {
               <p>カテゴリーがまだありません。例: 牛乳、卵、洗剤</p>
             </div>
           )}
-          {categories.length > 0 && (
-            <div className="search-box">
-              <span className="search-icon" aria-hidden="true">🔍</span>
-              <input
-                type="search"
-                value={categoryQuery}
-                onChange={(e) => setCategoryQuery(e.target.value)}
-                placeholder="カテゴリーを検索"
-                enterKeyHint="search"
-              />
-              {categoryQuery && (
-                <button type="button" className="search-clear" aria-label="検索をクリア" onClick={() => setCategoryQuery('')}>
-                  ✕
-                </button>
-              )}
-            </div>
-          )}
+          <div className="sticky-toolbar">
+            {categories.length > 0 ? (
+              <div className="search-box">
+                <span className="search-icon" aria-hidden="true">🔍</span>
+                <input
+                  type="search"
+                  value={categoryQuery}
+                  onChange={(e) => setCategoryQuery(e.target.value)}
+                  placeholder="カテゴリーを検索"
+                  enterKeyHint="search"
+                />
+                {categoryQuery && (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    aria-label="検索をクリア"
+                    onClick={() => setCategoryQuery('')}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div style={{ flex: 1 }} />
+            )}
+            <button
+              type="button"
+              className="toolbar-btn toolbar-btn-primary"
+              aria-label="カテゴリーを追加"
+              onClick={() => setCategoryModalOpen(true)}
+            >
+              ＋
+            </button>
+          </div>
           {categories.length > 0 && filteredCategories.length === 0 && (
             <div className="empty-state card">
               <p>「{categoryQuery}」に一致するカテゴリーはありません。</p>
@@ -298,37 +315,57 @@ export function ProductsPage() {
               })}
             </div>
           )}
-          <button type="button" className="btn btn-primary" onClick={() => setCategoryModalOpen(true)}>
-            ＋ カテゴリーを追加
-          </button>
         </div>
       )}
 
       {tab === 'products' && (
         <div>
-          <div className="search-box">
-            <span className="search-icon" aria-hidden="true">🔍</span>
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="商品名・メーカー・JANで検索"
-              enterKeyHint="search"
-            />
-            {query && (
-              <button type="button" className="search-clear" aria-label="検索をクリア" onClick={() => setQuery('')}>
-                ✕
-              </button>
-            )}
+          <div className="sticky-toolbar">
+            <div className="search-box">
+              <span className="search-icon" aria-hidden="true">🔍</span>
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="商品名・メーカー・JAN"
+                enterKeyHint="search"
+              />
+              {query && (
+                <button type="button" className="search-clear" aria-label="検索をクリア" onClick={() => setQuery('')}>
+                  ✕
+                </button>
+              )}
+            </div>
             <button
               type="button"
-              className="search-scan"
-              aria-label="バーコードで探す"
+              className="toolbar-btn"
+              aria-label="バーコードで探す・追加"
               onClick={() => setScanMode('find')}
             >
               📷
             </button>
+            <button
+              type="button"
+              className="toolbar-btn toolbar-btn-primary"
+              aria-label="商品を追加"
+              disabled={categories.length === 0}
+              onClick={() =>
+                setEditingProduct(
+                  emptyProduct(
+                    categoryFilter !== 'all' ? categoryFilter : (categories[0]?.categoryId ?? ''),
+                    defaultTaxCategoryId,
+                  ),
+                )
+              }
+            >
+              ＋
+            </button>
           </div>
+          {categories.length === 0 && (
+            <p className="muted" style={{ textAlign: 'center', margin: '0 0 10px' }}>
+              商品を追加するには、先にカテゴリーを追加してください
+            </p>
+          )}
 
           <div className="filter-row">
             <button
@@ -444,23 +481,6 @@ export function ProductsPage() {
             </div>
           )}
 
-          <button
-            type="button"
-            className="btn btn-secondary"
-            style={{ marginBottom: 10 }}
-            onClick={() => setScanMode('find')}
-          >
-            📷 バーコードで探す・追加
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={categories.length === 0}
-            onClick={() => setEditingProduct(emptyProduct(categories[0]?.categoryId ?? '', defaultTaxCategoryId))}
-          >
-            ＋ 商品を追加
-          </button>
-          {categories.length === 0 && <p className="muted" style={{ textAlign: 'center' }}>先にカテゴリーを追加してください</p>}
         </div>
       )}
 

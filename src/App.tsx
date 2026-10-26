@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppDataProvider } from './state/AppDataContext';
 import { TodayPage } from './pages/TodayPage';
 import { ShoppingListPage } from './pages/ShoppingListPage';
@@ -19,10 +19,22 @@ const TABS: { key: Tab; label: string; icon: string; title: string }[] = [
 function AppShell() {
   const [tab, setTab] = useState<Tab>('today');
   const current = TABS.find((t) => t.key === tab)!;
+  const headerRef = useRef<HTMLElement | null>(null);
+
+  // 固定ヘッダーの高さをCSS変数にして、画面内の固定ツールバーをその直下に置けるようにする
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const update = () => document.documentElement.style.setProperty('--header-h', `${el.offsetHeight}px`);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   return (
     <>
-      <header className="app-header">
+      <header className="app-header" ref={headerRef}>
         <h1>{current.title}</h1>
       </header>
       <main className="app-main">
