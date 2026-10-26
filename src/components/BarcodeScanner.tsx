@@ -1,6 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal';
 import { canonicalJan, normalizeJan } from '../lib/jan';
+import { getBarcodeDetector } from '../lib/barcodeDetector';
+
+type ExtendedCaps = MediaTrackCapabilities & {
+  focusMode?: string[];
+  zoom?: { min: number; max: number; step?: number };
+};
+
+/** ピントを連続オートフォーカスにし、寄りすぎてもピントが合うよう少しズームする（対応端末のみ） */
+async function tuneCamera(track: MediaStreamTrack | undefined) {
+  if (!track || !('getCapabilities' in track)) return;
+  const caps = track.getCapabilities() as ExtendedCaps;
+  const advanced: Record<string, unknown>[] = [];
+  if (caps.focusMode?.includes('continuous')) advanced.push({ focusMode: 'continuous' });
+  if (caps.zoom && caps.zoom.max >= 1.5) advanced.push({ zoom: Math.min(2, caps.zoom.max) });
+  for (const c of advanced) {
+    try {
+      await track.applyConstraints({ advanced: [c as MediaTrackConstraintSet] });
+    } catch {
+      // 未対応の設定は無視
+    }
+  }
+}
 
 interface BarcodeScannerProps {
   title?: string;
@@ -27,6 +49,19 @@ export function BarcodeScanner({ title = 'バーコードを読み取る', onDet
   const [errorMessage, setErrorMessage] = useState('');
   const [manualCode, setManualCode] = useState('');
   const [manualError, setManualError] = useState('');
+  const [torchTrack, setTorchTrack] = useState<MediaStreamTrack | null>(null);
+  const [torchOn, setTorchOn] = useState(false);
+
+  async function toggleTorch() {
+    if (!torchTrack) return;
+    const next = !torchOn;
+    try {
+      await torchTrack.applyConstraints({ advanced: [{ torch: next } as MediaTrackConstraintSet] });
+      setTorchOn(next);
+    } catch {
+      setTorchTrack(null);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -39,40 +74,82 @@ export function BarcodeScanner({ title = 'バーコードを読み取る', onDet
         return;
       }
       try {
-        const [{ BrowserMultiFormatReader }, { BarcodeFormat, DecodeHintType }] = await Promise.all([
-          import('@zxing/browser'),
-          import('@zxing/library'),
+        // 検出器（wasm）の読み込みとカメラ起動を同時に進める
+        const [detector, stream] = await Promise.all([
+          getBarcodeDetector(),
+          navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              facingMode: { ideal: 'environment' },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+          }),
         ]);
-        if (cancelled || !videoRef.current) return;
-
-        const hints = new Map();
-        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-          BarcodeFormat.EAN_13,
-          BarcodeFormat.EAN_8,
-          BarcodeFormat.UPC_A,
-          BarcodeFormat.UPC_E,
-        ]);
-        const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 150 });
-
-        const controls = await reader.decodeFromConstraints(
-          { audio: false, video: { facingMode: { ideal: 'environment' } } },
-          videoRef.current,
-          (result) => {
-            if (!result || doneRef.current) return;
-            const jan = canonicalJan(result.getText());
-            if (!jan) return; // チェックディジット不一致は読み違いとして無視
-            doneRef.current = true;
-            controls.stop();
-            if (navigator.vibrate) navigator.vibrate(80);
-            onDetectedRef.current(jan);
-          },
-        );
-        if (cancelled) {
-          controls.stop();
+        if (cancelled || !videoRef.current) {
+          stream.getTracks().forEach((t) => t.stop());
           return;
         }
-        stop = () => controls.stop();
+
+        const track = stream.getVideoTracks()[0];
+        await tuneCamera(track);
+
+        const video = videoRef.current;
+        video.srcObject = stream;
+        await video.play().catch(() => undefined);
+
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        let timer: number | undefined;
+        let attempt = 0;
+
+        const scan = async () => {
+          if (cancelled || doneRef.current) return;
+          const vw = video.videoWidth;
+          const vh = video.videoHeight;
+          if (ctx && vw > 0 && vh > 0) {
+            attempt++;
+            // 基本は枠の周辺（中央の帯）だけを切り出して高速に読む。3回に1回は画面全体も読む。
+            const full = attempt % 3 === 0;
+            const sx = full ? 0 : Math.round(vw * 0.05);
+            const sw = full ? vw : Math.round(vw * 0.9);
+            const sy = full ? 0 : Math.round(vh * 0.2);
+            const sh = full ? vh : Math.round(vh * 0.6);
+            const scale = Math.min(1, 1280 / sw);
+            canvas.width = Math.round(sw * scale);
+            canvas.height = Math.round(sh * scale);
+            ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+            try {
+              const codes = await detector.detect(canvas);
+              for (const code of codes) {
+                const jan = canonicalJan(code.rawValue);
+                if (!jan || doneRef.current || cancelled) continue; // チェックディジット不一致は読み違いとして無視
+                doneRef.current = true;
+                stopStream();
+                if (navigator.vibrate) navigator.vibrate(80);
+                onDetectedRef.current(jan);
+                return;
+              }
+            } catch (err) {
+              console.warn('[BarcodeScanner]', err);
+            }
+          }
+          timer = window.setTimeout(scan, 40);
+        };
+
+        const stopStream = () => {
+          window.clearTimeout(timer);
+          stream.getTracks().forEach((t) => t.stop());
+          video.srcObject = null;
+        };
+        stop = stopStream;
+
+        if (track && 'getCapabilities' in track) {
+          const caps = track.getCapabilities() as MediaTrackCapabilities & { torch?: boolean };
+          if (caps.torch) setTorchTrack(track);
+        }
         setStatus('scanning');
+        scan();
       } catch (err) {
         if (cancelled) return;
         const name = err instanceof Error ? err.name : '';
@@ -120,9 +197,16 @@ export function BarcodeScanner({ title = 'バーコードを読み取る', onDet
         {status === 'error' && <div className="scanner-overlay-text">{errorMessage}</div>}
       </div>
       {status === 'scanning' && (
-        <p className="muted" style={{ textAlign: 'center', margin: '8px 0 14px' }}>
-          バーコードを枠の中に横向きで合わせてください
-        </p>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, margin: '8px 0 14px' }}>
+          <p className="muted" style={{ margin: 0 }}>
+            バーコードを枠に合わせてください（少し離すとピントが合います）
+          </p>
+          {torchTrack && (
+            <button type="button" className="icon-btn" aria-label="ライト" onClick={toggleTorch}>
+              {torchOn ? '🔦' : '💡'}
+            </button>
+          )}
+        </div>
       )}
 
       <div className="field" style={{ marginTop: 12 }}>
