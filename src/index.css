@@ -512,3 +512,111 @@ textarea {
   background: var(--warn-bg);
   color: var(--warn);
 }
+
+/* --- 検索・絞り込み --- */
+.search-box {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 4px 6px 4px 12px;
+  margin-bottom: 10px;
+}
+
+.search-box input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 16px; /* iOSで入力時に画面が拡大されないよう16px以上 */
+  padding: 10px 0;
+  color: var(--text);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.search-box input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.search-icon {
+  font-size: 15px;
+  opacity: 0.6;
+}
+
+.search-clear,
+.search-scan {
+  border: none;
+  background: var(--accent-bg);
+  color: var(--accent-dark);
+  border-radius: 9px;
+  width: 36px;
+  height: 36px;
+  font-size: 15px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.search-clear {
+  background: transparent;
+  color: var(--text-faint);
+}
+
+.filter-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  overflow-x: auto;
+}
+
+.filter-row .chip {
+  flex-shrink: 0;
+}
+
+.filter-select {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.result-count {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 0 2px 8px;
+  font-size: 12px;
+}
+
+.link-btn {
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 0;
+}
+
+.row-link {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+}

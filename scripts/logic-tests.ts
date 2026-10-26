@@ -326,5 +326,16 @@ check(
   check('quantity parsed from cleaned name', q?.volume === 900 && q?.unit === 'ml', q);
 }
 
+{
+  const { matchesQuery, splitQuery } = await import('../src/lib/search');
+  const fields = ['香薫あらびきポークウィンナー', 'プリマハム', '加熱食肉製品'];
+  check('search: hiragana finds katakana', matchesQuery(fields, splitQuery('うぃんなー')));
+  check('search: half-width katakana', matchesQuery(fields, splitQuery('ｳｨﾝﾅｰ')));
+  check('search: multiple terms AND (maker + name)', matchesQuery(fields, splitQuery('プリマ　ウィンナー')));
+  check('search: category name matches', matchesQuery(fields, splitQuery('食肉')));
+  check('search: non-match rejected', !matchesQuery(fields, splitQuery('ぎょうざ')));
+  check('search: empty query matches all', matchesQuery(fields, splitQuery('  ')));
+}
+
 console.log(`\n${failures === 0 ? 'ALL TESTS PASSED' : `${failures} TEST(S) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

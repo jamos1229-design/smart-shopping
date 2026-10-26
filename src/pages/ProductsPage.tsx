@@ -7,7 +7,8 @@ import { BarcodeScanner } from '../components/BarcodeScanner';
 import { generateId } from '../lib/id';
 import type { Category, ComparisonUnit, Product } from '../types';
 import { COMPARISON_UNIT_LABELS } from '../lib/unitPrice';
-import { sameJan } from '../lib/jan';
+import { sameJan, normalizeJan } from '../lib/jan';
+import { matchesQuery, splitQuery } from '../lib/search';
 import { lookupProductByJan, LOOKUP_SOURCE_LABELS, type LookupSource, type ProductLookupResult } from '../lib/productLookup';
 
 function emptyProduct(categoryId: string, taxCategoryId: string): Product {
@@ -54,17 +55,37 @@ function applyLookup(product: Product, result: ProductLookupResult): Product {
 }
 
 type ScanMode = 'find' | 'field';
+type SortKey = 'name' | 'recentPrice' | 'added';
+
+const SORT_LABELS: Record<SortKey, string> = {
+  name: '名前順',
+  recentPrice: '価格を最近登録した順',
+  added: '新しく追加した順',
+};
 type LookupNotice = { productId: string; kind: 'loading' | 'found' | 'notfound'; source?: LookupSource } | null;
 
 export function ProductsPage() {
-  const { categories, products, taxCategories, saveCategory, removeCategory, saveProduct, removeProduct } =
-    useAppData();
+  const {
+    categories,
+    products,
+    taxCategories,
+    priceRecords,
+    favoriteProducts,
+    saveCategory,
+    removeCategory,
+    saveProduct,
+    removeProduct,
+  } = useAppData();
   const [tab, setTab] = useState<'products' | 'categories'>('products');
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [detailProductId, setDetailProductId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [query, setQuery] = useState('');
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>('name');
+  const [categoryQuery, setCategoryQuery] = useState('');
   const [scanMode, setScanMode] = useState<ScanMode | null>(null);
   const [lookupNotice, setLookupNotice] = useState<LookupNotice>(null);
 
@@ -72,10 +93,63 @@ export function ProductsPage() {
 
   const categoryName = (id: string) => categories.find((c) => c.categoryId === id)?.name ?? '未分類';
 
-  const filteredProducts = useMemo(
-    () => (categoryFilter === 'all' ? products : products.filter((p) => p.categoryId === categoryFilter)),
-    [products, categoryFilter],
-  );
+  const categoryNameById = useMemo(() => new Map(categories.map((c) => [c.categoryId, c.name])), [categories]);
+
+  const lastPriceDateByProduct = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of priceRecords) {
+      const key = `${r.confirmedDate}|${r.createdAt}`;
+      const prev = map.get(r.productId);
+      if (!prev || key > prev) map.set(r.productId, key);
+    }
+    return map;
+  }, [priceRecords]);
+
+  const favoriteIds = useMemo(() => new Set(favoriteProducts.map((f) => f.productId)), [favoriteProducts]);
+
+  const filteredProducts = useMemo(() => {
+    const terms = splitQuery(query);
+    const digits = normalizeJan(query);
+    const list = products
+      .map((p, index) => ({ p, index }))
+      .filter(({ p }) => categoryFilter === 'all' || p.categoryId === categoryFilter)
+      .filter(({ p }) => !favoritesOnly || favoriteIds.has(p.productId))
+      .filter(({ p }) => {
+        if (terms.length === 0) return true;
+        // 数字だけの入力はJANコードの一部としても探す
+        if (digits.length >= 4 && digits === query.trim() && p.janCode.includes(digits)) return true;
+        return matchesQuery(
+          [p.name, p.manufacturer, p.brand, p.spec, p.memo, categoryNameById.get(p.categoryId)],
+          terms,
+        );
+      });
+
+    list.sort((a, b) => {
+      if (sortKey === 'added') return b.index - a.index;
+      if (sortKey === 'recentPrice') {
+        const da = lastPriceDateByProduct.get(a.p.productId) ?? '';
+        const db = lastPriceDateByProduct.get(b.p.productId) ?? '';
+        if (da !== db) return da < db ? 1 : -1;
+      }
+      return a.p.name.localeCompare(b.p.name, 'ja');
+    });
+    return list.map(({ p }) => p);
+  }, [products, categoryFilter, favoritesOnly, favoriteIds, query, sortKey, lastPriceDateByProduct, categoryNameById]);
+
+  const productCountByCategory = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const p of products) map.set(p.categoryId, (map.get(p.categoryId) ?? 0) + 1);
+    return map;
+  }, [products]);
+
+  const filteredCategories = useMemo(() => {
+    const terms = splitQuery(categoryQuery);
+    return categories
+      .filter((c) => matchesQuery([c.name, c.memo], terms))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+  }, [categories, categoryQuery]);
+
+  const isFiltering = query.trim() !== '' || categoryFilter !== 'all' || favoritesOnly;
 
   function handleAddCategory() {
     if (!newCategoryName.trim()) return;
@@ -165,26 +239,65 @@ export function ProductsPage() {
               <p>カテゴリーがまだありません。例: 牛乳、卵、洗剤</p>
             </div>
           )}
-          <div className="card">
-            {categories.map((cat: Category) => (
-              <div className="list-row" key={cat.categoryId}>
-                <div className="item-name">{cat.name}</div>
-                <button
-                  type="button"
-                  className="btn btn-danger btn-sm"
-                  onClick={() => {
-                    if (products.some((p) => p.categoryId === cat.categoryId)) {
-                      alert('このカテゴリーに属する商品があるため削除できません。');
-                      return;
-                    }
-                    if (confirm(`「${cat.name}」を削除しますか？`)) removeCategory(cat.categoryId);
-                  }}
-                >
-                  削除
+          {categories.length > 0 && (
+            <div className="search-box">
+              <span className="search-icon" aria-hidden="true">🔍</span>
+              <input
+                type="search"
+                value={categoryQuery}
+                onChange={(e) => setCategoryQuery(e.target.value)}
+                placeholder="カテゴリーを検索"
+                enterKeyHint="search"
+              />
+              {categoryQuery && (
+                <button type="button" className="search-clear" aria-label="検索をクリア" onClick={() => setCategoryQuery('')}>
+                  ✕
                 </button>
-              </div>
-            ))}
-          </div>
+              )}
+            </div>
+          )}
+          {categories.length > 0 && filteredCategories.length === 0 && (
+            <div className="empty-state card">
+              <p>「{categoryQuery}」に一致するカテゴリーはありません。</p>
+            </div>
+          )}
+          {filteredCategories.length > 0 && (
+            <div className="card">
+              {filteredCategories.map((cat: Category) => {
+                const count = productCountByCategory.get(cat.categoryId) ?? 0;
+                return (
+                  <div className="list-row" key={cat.categoryId}>
+                    <button
+                      type="button"
+                      className="row-link"
+                      onClick={() => {
+                        setCategoryFilter(cat.categoryId);
+                        setQuery('');
+                        setFavoritesOnly(false);
+                        setTab('products');
+                      }}
+                    >
+                      <div className="item-name">{cat.name}</div>
+                      <div className="muted">{count}件の商品 ・ タップで一覧を表示</div>
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger btn-sm"
+                      onClick={() => {
+                        if (count > 0) {
+                          alert('このカテゴリーに属する商品があるため削除できません。');
+                          return;
+                        }
+                        if (confirm(`「${cat.name}」を削除しますか？`)) removeCategory(cat.categoryId);
+                      }}
+                    >
+                      削除
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           <button type="button" className="btn btn-primary" onClick={() => setCategoryModalOpen(true)}>
             ＋ カテゴリーを追加
           </button>
@@ -193,43 +306,143 @@ export function ProductsPage() {
 
       {tab === 'products' && (
         <div>
-          <div className="field">
-            <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
-              <option value="all">すべてのカテゴリー</option>
-              {categories.map((c) => (
-                <option key={c.categoryId} value={c.categoryId}>
-                  {c.name}
+          <div className="search-box">
+            <span className="search-icon" aria-hidden="true">🔍</span>
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="商品名・メーカー・JANで検索"
+              enterKeyHint="search"
+            />
+            {query && (
+              <button type="button" className="search-clear" aria-label="検索をクリア" onClick={() => setQuery('')}>
+                ✕
+              </button>
+            )}
+            <button
+              type="button"
+              className="search-scan"
+              aria-label="バーコードで探す"
+              onClick={() => setScanMode('find')}
+            >
+              📷
+            </button>
+          </div>
+
+          <div className="filter-row">
+            <button
+              type="button"
+              className={`chip ${favoritesOnly ? 'active' : ''}`}
+              onClick={() => setFavoritesOnly((v) => !v)}
+            >
+              ★ いつもの
+            </button>
+            <select
+              className="filter-select"
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              aria-label="カテゴリーで絞り込み"
+            >
+              <option value="all">全カテゴリー</option>
+              {[...categories]
+                .sort((a, b) => a.name.localeCompare(b.name, 'ja'))
+                .map((c) => (
+                  <option key={c.categoryId} value={c.categoryId}>
+                    {c.name}（{productCountByCategory.get(c.categoryId) ?? 0}）
+                  </option>
+                ))}
+            </select>
+            <select
+              className="filter-select"
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as SortKey)}
+              aria-label="並び替え"
+            >
+              {Object.entries(SORT_LABELS).map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
                 </option>
               ))}
             </select>
           </div>
 
-          {filteredProducts.length === 0 && (
+          {products.length > 0 && (
+            <div className="result-count">
+              <span className="muted">
+                {isFiltering ? `${filteredProducts.length}件 / 全${products.length}件` : `全${products.length}件`}
+              </span>
+              {isFiltering && (
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() => {
+                    setQuery('');
+                    setCategoryFilter('all');
+                    setFavoritesOnly(false);
+                  }}
+                >
+                  条件をクリア
+                </button>
+              )}
+            </div>
+          )}
+
+          {products.length === 0 && (
             <div className="empty-state card">
               <p>商品がまだ登録されていません。</p>
             </div>
           )}
 
-          <div className="card">
-            {filteredProducts.map((product) => (
-              <div
-                className="list-row"
-                key={product.productId}
-                onClick={() => setDetailProductId(product.productId)}
-                style={{ cursor: 'pointer' }}
-              >
-                <div>
-                  <div className="item-name">{product.name}</div>
-                  <div className="muted">
-                    {categoryName(product.categoryId)}
-                    {product.manufacturer ? ` ・ ${product.manufacturer}` : ''}
-                    {product.volume ? ` ・ ${product.volume}${product.volumeUnit}` : ''}
+          {products.length > 0 && filteredProducts.length === 0 && (
+            <div className="empty-state card">
+              <p>{query.trim() ? `「${query.trim()}」は見つかりませんでした。` : '条件に合う商品はありません。'}</p>
+              {query.trim() && categories.length > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  style={{ marginTop: 8 }}
+                  onClick={() =>
+                    setEditingProduct({
+                      ...emptyProduct(
+                        categoryFilter !== 'all' ? categoryFilter : (categories[0]?.categoryId ?? ''),
+                        defaultTaxCategoryId,
+                      ),
+                      name: query.trim(),
+                    })
+                  }
+                >
+                  ＋「{query.trim()}」を新しく登録
+                </button>
+              )}
+            </div>
+          )}
+
+          {filteredProducts.length > 0 && (
+            <div className="card">
+              {filteredProducts.map((product) => (
+                <div
+                  className="list-row"
+                  key={product.productId}
+                  onClick={() => setDetailProductId(product.productId)}
+                  style={{ cursor: 'pointer' }}
+                >
+                  <div>
+                    <div className="item-name">
+                      {favoriteIds.has(product.productId) ? '★ ' : ''}
+                      {product.name}
+                    </div>
+                    <div className="muted">
+                      {categoryName(product.categoryId)}
+                      {product.manufacturer ? ` ・ ${product.manufacturer}` : ''}
+                      {product.volume ? ` ・ ${product.volume}${product.volumeUnit}` : ''}
+                    </div>
                   </div>
+                  <span className="badge badge-accent">{COMPARISON_UNIT_LABELS[product.comparisonUnit]}</span>
                 </div>
-                <span className="badge badge-accent">{COMPARISON_UNIT_LABELS[product.comparisonUnit]}</span>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
 
           <button
             type="button"

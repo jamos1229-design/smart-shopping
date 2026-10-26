@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
+import { matchesQuery, splitQuery } from '../lib/search';
 
 export interface SearchableSelectOption {
   value: string;
@@ -22,11 +23,9 @@ export function SearchableSelect({ options, value, onChange, placeholder, emptyM
   const selected = options.find((o) => o.value === value);
 
   const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return options;
-    return options.filter(
-      (o) => o.label.toLowerCase().includes(needle) || (o.sublabel ?? '').toLowerCase().includes(needle),
-    );
+    const terms = splitQuery(query);
+    if (terms.length === 0) return options;
+    return options.filter((o) => matchesQuery([o.label, o.sublabel], terms));
   }, [options, query]);
 
   function handleFocus() {
