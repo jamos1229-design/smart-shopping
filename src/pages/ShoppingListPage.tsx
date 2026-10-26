@@ -138,7 +138,16 @@ export function ShoppingListPage() {
         </div>
       )}
 
-      <div className="section-title">買うもの（{items.length}件）</div>
+      <div className="sticky-toolbar">
+        <div className="toolbar-title">買うもの（{items.length}件）</div>
+        <button
+          type="button"
+          className="toolbar-btn toolbar-btn-primary toolbar-btn-wide"
+          onClick={() => setAddModalOpen(true)}
+        >
+          ＋ 追加
+        </button>
+      </div>
       {items.length === 0 ? (
         <div className="empty-state card">
           <p>まだ商品が追加されていません。</p>
@@ -173,9 +182,6 @@ export function ShoppingListPage() {
         </div>
       )}
 
-      <button type="button" className="btn btn-primary" onClick={() => setAddModalOpen(true)}>
-        ＋ 商品を追加する
-      </button>
 
       {addModalOpen && (
         <Modal

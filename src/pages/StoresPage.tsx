@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useAppData } from '../state/AppDataContext';
 import { Modal } from '../components/Modal';
 import { generateId } from '../lib/id';
+import { matchesQuery, splitQuery } from '../lib/search';
 import type { Chain, Store, StoreType } from '../types';
 
 const STORE_TYPE_LABEL: Record<StoreType, string> = {
@@ -38,6 +39,7 @@ export function StoresPage() {
   const [newChainName, setNewChainName] = useState('');
   const [editingStore, setEditingStore] = useState<Store | null>(null);
   const [addingChainId, setAddingChainId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
 
   const storesByChain = useMemo(() => {
     const map = new Map<string, Store[]>();
@@ -48,6 +50,22 @@ export function StoresPage() {
     }
     return map;
   }, [stores]);
+
+  const terms = useMemo(() => splitQuery(query), [query]);
+
+  // 検索中は、チェーン名に一致すれば全店舗、店舗名・住所に一致すればその店舗だけを表示
+  const visibleChains = useMemo(() => {
+    return chains
+      .map((chain) => {
+        const all = storesByChain.get(chain.chainId) ?? [];
+        if (terms.length === 0 || matchesQuery([chain.name], terms)) return { chain, stores: all };
+        const hit = all.filter((st) =>
+          matchesQuery([chain.name, st.displayName, st.branchName, st.address, STORE_TYPE_LABEL[st.storeType]], terms),
+        );
+        return { chain, stores: hit };
+      })
+      .filter(({ chain, stores: list }) => terms.length === 0 || list.length > 0 || matchesQuery([chain.name], terms));
+  }, [chains, storesByChain, terms]);
 
   function handleAddChain() {
     if (!newChainName.trim()) return;
@@ -71,35 +89,88 @@ export function StoresPage() {
 
   return (
     <div>
-      <div className="section-title">チェーン・店舗</div>
+      <div className="sticky-toolbar">
+        <div className="search-box">
+          <span className="search-icon" aria-hidden="true">🔍</span>
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="店舗名・住所で検索"
+            enterKeyHint="search"
+          />
+          {query && (
+            <button type="button" className="search-clear" aria-label="検索をクリア" onClick={() => setQuery('')}>
+              ✕
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          className="toolbar-btn toolbar-btn-primary"
+          aria-label="チェーンを追加"
+          onClick={() => setChainModalOpen(true)}
+        >
+          ＋
+        </button>
+      </div>
+
+      <div className="result-count">
+        <span className="muted">
+          チェーン{chains.length}件 ・ 店舗{stores.length}件
+        </span>
+        <span className="muted">＋でチェーンを追加</span>
+      </div>
 
       {chains.length === 0 && (
         <div className="empty-state card">
-          <p>まだチェーンが登録されていません。</p>
+          <p>まだチェーンが登録されていません。右上の＋から追加してください。</p>
         </div>
       )}
 
-      {chains.map((chain) => (
+      {chains.length > 0 && visibleChains.length === 0 && (
+        <div className="empty-state card">
+          <p>「{query.trim()}」に一致する店舗はありません。</p>
+        </div>
+      )}
+
+      {visibleChains.map(({ chain, stores: chainStores }) => (
         <div className="card" key={chain.chainId}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h2>{chain.name}</h2>
-            <button
-              type="button"
-              className="btn btn-danger btn-sm"
-              onClick={() => {
-                if (confirm(`「${chain.name}」を削除しますか？所属する店舗も削除されます。`)) {
-                  for (const store of storesByChain.get(chain.chainId) ?? []) removeStore(store.storeId);
-                  removeChain(chain.chainId);
-                }
-              }}
-            >
-              削除
-            </button>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <h2 style={{ margin: 0 }}>{chain.name}</h2>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => startAddStore(chain)}
+              >
+                ＋ 店舗
+              </button>
+              <button
+                type="button"
+                className="icon-btn icon-btn-danger"
+                aria-label={`${chain.name}を削除`}
+                onClick={() => {
+                  if (confirm(`「${chain.name}」を削除しますか？所属する店舗も削除されます。`)) {
+                    for (const store of storesByChain.get(chain.chainId) ?? []) removeStore(store.storeId);
+                    removeChain(chain.chainId);
+                  }
+                }}
+              >
+                🗑
+              </button>
+            </div>
           </div>
 
-          {(storesByChain.get(chain.chainId) ?? []).map((store) => (
+          {chainStores.length === 0 && (
+            <p className="muted" style={{ margin: '10px 0 0' }}>
+              店舗がまだありません。「＋ 店舗」から追加してください。
+            </p>
+          )}
+
+          {chainStores.map((store) => (
             <div className="list-row" key={store.storeId}>
-              <div>
+              <button type="button" className="row-link" onClick={() => setEditingStore(store)}>
                 <div className="item-name">
                   {store.isFavorite ? '★ ' : ''}
                   {store.displayName}
@@ -108,35 +179,31 @@ export function StoresPage() {
                   {STORE_TYPE_LABEL[store.storeType]}
                   {store.address ? ` ・ ${store.address}` : ''}
                 </div>
-              </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditingStore(store)}>
-                  編集
+              </button>
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label={`${store.displayName}を編集`}
+                  onClick={() => setEditingStore(store)}
+                >
+                  ✎
                 </button>
                 <button
                   type="button"
-                  className="btn btn-danger btn-sm"
+                  className="icon-btn icon-btn-danger"
+                  aria-label={`${store.displayName}を削除`}
                   onClick={() => {
                     if (confirm(`「${store.displayName}」を削除しますか？`)) removeStore(store.storeId);
                   }}
                 >
-                  削除
+                  🗑
                 </button>
               </div>
             </div>
           ))}
-
-          <div style={{ marginTop: 10 }}>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => startAddStore(chain)}>
-              ＋ この系列に店舗を追加
-            </button>
-          </div>
         </div>
       ))}
-
-      <button type="button" className="btn btn-primary" onClick={() => setChainModalOpen(true)}>
-        ＋ チェーンを追加
-      </button>
 
       {chainModalOpen && (
         <Modal title="チェーンを追加" onClose={() => setChainModalOpen(false)}>

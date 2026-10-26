@@ -656,3 +656,22 @@ textarea {
   color: inherit;
   font: inherit;
 }
+
+.toolbar-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-sub);
+}
+
+.toolbar-btn-wide {
+  width: auto;
+  padding: 0 18px;
+  font-size: 16px;
+}
+
+.icon-btn-danger {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
