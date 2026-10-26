@@ -1,13 +1,24 @@
-// JANコードから商品名・メーカー・容量を外部の無料データベース（Open Food Facts）で調べる。
-// 価格は取得しない（店頭価格を公開しているデータベースは存在しないため）。
-// 日本の商品は未登録も多いので、見つからない前提でUIを作ること。
+// JANコードから商品名・メーカー・容量を外部データベースで調べる。
+// 1. Yahoo!ショッピング 商品検索API（日本の商品に強い）
+// 2. 見つからない・つながらない場合は Open Food Facts
+// 価格は取得しない（ネット通販の価格は近所の店頭価格とは別物のため）。
+
+// 商品検索APIのClient ID（ID連携なし）。公開されても商品検索にしか使えない。
+const YAHOO_APP_ID = 'dmVyPTIwMjUwNyZpZD1wNTJ4c2ZNNnFNJmhhc2g9TXpCbU16TTNZakExTm1RME1tRXhNZw';
+
+export type LookupSource = 'yahoo' | 'openfoodfacts';
+
+export const LOOKUP_SOURCE_LABELS: Record<LookupSource, string> = {
+  yahoo: 'Yahoo!ショッピング',
+  openfoodfacts: 'Open Food Facts',
+};
 
 export interface ProductLookupResult {
   name: string;
   brand: string;
   volume: number | null;
   volumeUnit: string;
-  source: 'openfoodfacts';
+  source: LookupSource;
 }
 
 interface OffProduct {
@@ -55,42 +66,109 @@ function pickName(p: OffProduct): string {
   return (p.product_name_ja || p.product_name || p.generic_name_ja || '').trim();
 }
 
-export async function lookupProductByJan(
-  jan: string,
-  { timeoutMs = 6000 }: { timeoutMs?: number } = {},
-): Promise<ProductLookupResult | null> {
+/**
+ * 通販の商品名から販促用の文言を取り除く。
+ * 例: "【送料無料】明治 おいしい牛乳 900ml×6本 ケース" → "明治 おいしい牛乳 900ml"
+ */
+export function cleanShoppingItemName(raw: string): string {
+  let s = raw.normalize('NFKC');
+  s = s.replace(/[【\[［(（〔<＜《][^】\]］)）〕>＞》]*[】\]］)）〕>＞》]/g, ' ');
+  s = s.replace(/[×x*]\s*\d+\s*(本|個|袋|パック|缶|箱|セット|ケース|入)?/gi, ' ');
+  s = s.replace(/\d+\s*(本|個|袋|パック|缶|箱)\s*(セット|入り?)/g, ' ');
+  s = s.replace(
+    /(送料無料|送料込み?|ポイント\d*倍|まとめ買い|ケース販売|ケース|セット|あす楽|即日発送|在庫あり|お取り寄せ|最安値|激安|特価|クーポン[^ ]*|公式|正規品|代引[^ ]*)/g,
+    ' ',
+  );
+  s = s.replace(/[★☆◆◇■□●○♪!！※・]+/g, ' ');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+interface YahooHit {
+  name?: string;
+  brand?: { name?: string };
+}
+
+async function lookupYahoo(jan: string, signal: AbortSignal): Promise<ProductLookupResult | null> {
+  const url =
+    'https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch' +
+    `?appid=${encodeURIComponent(YAHOO_APP_ID)}&jan_code=${encodeURIComponent(jan)}&results=10`;
+  const res = await fetch(url, { signal });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { hits?: YahooHit[] };
+  const hits = (data.hits ?? []).filter((h) => h.name);
+  if (hits.length === 0) return null;
+
+  // 店ごとに名前がばらつくので、整形後いちばん短い名前を採用（販促文言が少ない）
+  const names = hits.map((h) => cleanShoppingItemName(h.name ?? '')).filter((n) => n.length >= 2);
+  if (names.length === 0) return null;
+  const name = names.reduce((a, b) => (b.length < a.length ? b : a));
+
+  // ブランドは最も多く出てくるものを採用
+  const brandCounts = new Map<string, number>();
+  for (const h of hits) {
+    const b = h.brand?.name?.trim();
+    if (b) brandCounts.set(b, (brandCounts.get(b) ?? 0) + 1);
+  }
+  const brand = [...brandCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+
+  const parsed = parseQuantity(name) ?? names.map((n) => parseQuantity(n)).find((q) => q) ?? null;
+  return {
+    name,
+    brand,
+    volume: parsed?.volume ?? null,
+    volumeUnit: parsed?.unit ?? '',
+    source: 'yahoo',
+  };
+}
+
+async function lookupOpenFoodFacts(jan: string, signal: AbortSignal): Promise<ProductLookupResult | null> {
+  const url =
+    `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(jan)}.json` +
+    '?fields=product_name,product_name_ja,generic_name_ja,brands,quantity,product_quantity,product_quantity_unit';
+  const res = await fetch(url, { signal });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { status?: number; product?: OffProduct };
+  if (data.status !== 1 || !data.product) return null;
+
+  const p = data.product;
+  const name = pickName(p);
+  const brand = (p.brands ?? '').split(',')[0]?.trim() ?? '';
+  const parsed =
+    parseQuantity(p.quantity) ??
+    (p.product_quantity && p.product_quantity_unit
+      ? parseQuantity(`${p.product_quantity} ${p.product_quantity_unit}`)
+      : null);
+
+  if (!name && !brand && !parsed) return null;
+  return {
+    name,
+    brand,
+    volume: parsed?.volume ?? null,
+    volumeUnit: parsed?.unit ?? '',
+    source: 'openfoodfacts',
+  };
+}
+
+async function withTimeout<T>(fn: (signal: AbortSignal) => Promise<T>, timeoutMs: number): Promise<T | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const url =
-      `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(jan)}.json` +
-      '?fields=product_name,product_name_ja,generic_name_ja,brands,quantity,product_quantity,product_quantity_unit';
-    const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { status?: number; product?: OffProduct };
-    if (data.status !== 1 || !data.product) return null;
-
-    const p = data.product;
-    const name = pickName(p);
-    const brand = (p.brands ?? '').split(',')[0]?.trim() ?? '';
-    const parsed =
-      parseQuantity(p.quantity) ??
-      (p.product_quantity && p.product_quantity_unit
-        ? parseQuantity(`${p.product_quantity} ${p.product_quantity_unit}`)
-        : null);
-
-    if (!name && !brand && !parsed) return null;
-    return {
-      name,
-      brand,
-      volume: parsed?.volume ?? null,
-      volumeUnit: parsed?.unit ?? '',
-      source: 'openfoodfacts',
-    };
-  } catch {
-    // オフライン・タイムアウト・CORS等。手入力にフォールバックする。
+    return await fn(controller.signal);
+  } catch (err) {
+    // オフライン・タイムアウト・CORS等は「見つからない」扱い
+    console.warn('[productLookup]', err);
     return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function lookupProductByJan(
+  jan: string,
+  { timeoutMs = 6000 }: { timeoutMs?: number } = {},
+): Promise<ProductLookupResult | null> {
+  return (
+    (await withTimeout((signal) => lookupYahoo(jan, signal), timeoutMs)) ??
+    (await withTimeout((signal) => lookupOpenFoodFacts(jan, signal), timeoutMs))
+  );
 }

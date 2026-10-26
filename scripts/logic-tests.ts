@@ -316,5 +316,15 @@ check(
 }
 
 
+{
+  const { cleanShoppingItemName, parseQuantity: pq } = await import('../src/lib/productLookup');
+  const c1 = cleanShoppingItemName('【送料無料】明治 おいしい牛乳 900ml×6本 ケース');
+  check('clean shopping name strips promo + multipack', c1 === '明治 おいしい牛乳 900ml', c1);
+  const c2 = cleanShoppingItemName('★ポイント5倍★ キッコーマン 特選丸大豆しょうゆ 1L 2本セット');
+  check('clean shopping name strips points + set', c2 === 'キッコーマン 特選丸大豆しょうゆ 1L', c2);
+  const q = pq(c1);
+  check('quantity parsed from cleaned name', q?.volume === 900 && q?.unit === 'ml', q);
+}
+
 console.log(`\n${failures === 0 ? 'ALL TESTS PASSED' : `${failures} TEST(S) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

@@ -8,7 +8,7 @@ import { generateId } from '../lib/id';
 import type { Category, ComparisonUnit, Product } from '../types';
 import { COMPARISON_UNIT_LABELS } from '../lib/unitPrice';
 import { sameJan } from '../lib/jan';
-import { lookupProductByJan, type ProductLookupResult } from '../lib/productLookup';
+import { lookupProductByJan, LOOKUP_SOURCE_LABELS, type LookupSource, type ProductLookupResult } from '../lib/productLookup';
 
 function emptyProduct(categoryId: string, taxCategoryId: string): Product {
   return {
@@ -54,7 +54,7 @@ function applyLookup(product: Product, result: ProductLookupResult): Product {
 }
 
 type ScanMode = 'find' | 'field';
-type LookupNotice = { productId: string; kind: 'loading' | 'found' | 'notfound' } | null;
+type LookupNotice = { productId: string; kind: 'loading' | 'found' | 'notfound'; source?: LookupSource } | null;
 
 export function ProductsPage() {
   const { categories, products, taxCategories, saveCategory, removeCategory, saveProduct, removeProduct } =
@@ -92,7 +92,9 @@ export function ProductsPage() {
     setLookupNotice({ productId, kind: 'loading' });
     const result = await lookupProductByJan(jan);
     setLookupNotice((prev) =>
-      prev && prev.productId === productId ? { productId, kind: result ? 'found' : 'notfound' } : prev,
+      prev && prev.productId === productId
+        ? { productId, kind: result ? 'found' : 'notfound', source: result?.source }
+        : prev,
     );
     if (!result) return;
     setEditingProduct((prev) => (prev && prev.productId === productId && sameJan(prev.janCode, jan) ? applyLookup(prev, result) : prev));
@@ -274,7 +276,15 @@ export function ProductsPage() {
           {notice?.kind === 'loading' && <div className="notice notice-warn">商品データベースを検索しています…</div>}
           {notice?.kind === 'found' && (
             <div className="notice notice-good">
-              商品データベースから自動入力しました。商品名・容量が正しいか確認してください。
+              {notice.source ? LOOKUP_SOURCE_LABELS[notice.source] : '商品データベース'}
+              から自動入力しました。商品名・容量が正しいか確認してください。
+              {notice.source === 'yahoo' && (
+                <div style={{ marginTop: 4 }}>
+                  <a href="https://developer.yahoo.co.jp/sitemap/" target="_blank" rel="noreferrer">
+                    Webサービス by Yahoo! JAPAN
+                  </a>
+                </div>
+              )}
             </div>
           )}
           {notice?.kind === 'notfound' && (
