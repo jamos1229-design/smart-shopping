@@ -518,6 +518,20 @@ export function ProductsPage() {
                   </a>
                 </div>
               )}
+              {notice.source === 'openfoodfacts' && (
+                <div style={{ marginTop: 4 }}>
+                  <a href="https://world.openfoodfacts.org" target="_blank" rel="noreferrer">
+                    Data by Open Food Facts (ODbL)
+                  </a>
+                </div>
+              )}
+              {notice.source === 'openproductsfacts' && (
+                <div style={{ marginTop: 4 }}>
+                  <a href="https://world.openproductsfacts.org" target="_blank" rel="noreferrer">
+                    Data by Open Products Facts (ODbL)
+                  </a>
+                </div>
+              )}
             </div>
           )}
           {notice?.kind === 'notfound' && (

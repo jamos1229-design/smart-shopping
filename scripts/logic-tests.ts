@@ -337,5 +337,98 @@ check(
   check('search: empty query matches all', matchesQuery(fields, splitQuery('  ')));
 }
 
+// --- JAN lookup provider chain (mocked fetch — reproduces the reported bug) ---
+// Real scenario: JAN 4901301419965 (花王 ワイドハイターEXパワー 詰め替え450ml).
+// Yahoo Shopping's API is server-side only and fails with a CORS/network error when
+// called directly from a browser-hosted static site; Open Food Facts is food-only and
+// has no match; Open Products Facts (same engine, covers household goods) has it.
+{
+  const originalFetch = globalThis.fetch;
+  type FetchCall = { url: string };
+  const calls: FetchCall[] = [];
+
+  function mockFetch(responses: {
+    yahoo?: 'network-error' | { status: number; body: unknown };
+    openfoodfacts?: { status: number; body: unknown };
+    openproductsfacts?: { status: number; body: unknown };
+  }) {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push({ url });
+      if (url.includes('shopping.yahooapis.jp')) {
+        if (responses.yahoo === 'network-error' || !responses.yahoo) {
+          throw new TypeError('Failed to fetch');
+        }
+        return new Response(JSON.stringify(responses.yahoo.body), { status: responses.yahoo.status });
+      }
+      if (url.includes('world.openfoodfacts.org')) {
+        const r = responses.openfoodfacts ?? { status: 200, body: { status: 0 } };
+        return new Response(JSON.stringify(r.body), { status: r.status });
+      }
+      if (url.includes('world.openproductsfacts.org')) {
+        const r = responses.openproductsfacts ?? { status: 200, body: { status: 0 } };
+        return new Response(JSON.stringify(r.body), { status: r.status });
+      }
+      throw new Error(`unexpected fetch to ${url}`);
+    }) as typeof fetch;
+  }
+
+  const { lookupProductByJan } = await import('../src/lib/productLookup');
+
+  // 1. Yahoo blocked by CORS (network error), OFF has nothing (food-only db),
+  //    OPF has the real product -> should still resolve correctly.
+  calls.length = 0;
+  mockFetch({
+    openproductsfacts: {
+      status: 200,
+      body: {
+        status: 1,
+        product: {
+          product_name_ja: '花王 ワイドハイターEXパワー 詰め替え450ml',
+          brands: '花王',
+          quantity: '450 ml',
+        },
+      },
+    },
+  });
+  const result = await lookupProductByJan('4901301419965');
+  check(
+    'falls through Yahoo (CORS failure) and OFF (no food match) to find it on Open Products Facts',
+    result?.source === 'openproductsfacts' &&
+      result.name === '花王 ワイドハイターEXパワー 詰め替え450ml' &&
+      result.brand === '花王' &&
+      result.volume === 450 &&
+      result.volumeUnit === 'ml',
+    result,
+  );
+  check('tried all three sources in order (yahoo, off, opf)', calls.length === 3, calls);
+  check(
+    'source order is yahoo -> openfoodfacts -> openproductsfacts',
+    calls[0].url.includes('yahooapis') && calls[1].url.includes('openfoodfacts') && calls[2].url.includes('openproductsfacts'),
+    calls,
+  );
+
+  // 2. Nothing anywhere -> null, never guessed, caller falls back to manual entry.
+  calls.length = 0;
+  mockFetch({});
+  const notFound = await lookupProductByJan('4901301419965');
+  check('returns null (not a guess) when no source has the product', notFound === null, notFound);
+
+  // 3. Yahoo actually works (e.g. CORS allowed in some environment) -> short-circuits,
+  //    OFF/OPF never called.
+  calls.length = 0;
+  mockFetch({
+    yahoo: {
+      status: 200,
+      body: { hits: [{ name: '花王 ワイドハイター EXパワー 詰め替え 450ml', brand: { name: '花王' } }] },
+    },
+  });
+  const viaYahoo = await lookupProductByJan('4901301419965');
+  check('uses Yahoo result when it succeeds', viaYahoo?.source === 'yahoo', viaYahoo);
+  check('does not call OFF/OPF once Yahoo succeeds', calls.length === 1, calls);
+
+  globalThis.fetch = originalFetch;
+}
+
 console.log(`\n${failures === 0 ? 'ALL TESTS PASSED' : `${failures} TEST(S) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);

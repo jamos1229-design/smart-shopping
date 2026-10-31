@@ -1,16 +1,22 @@
 // JANコードから商品名・メーカー・容量を外部データベースで調べる。
 // 1. Yahoo!ショッピング 商品検索API（日本の商品に強い）
-// 2. 見つからない・つながらない場合は Open Food Facts
+//    ただしこのAPIはサーバー間通信向けで、ブラウザから直接呼ぶとCORSで
+//    ブロックされる環境がある（本アプリはサーバーを持たない静的サイトのため該当しうる）。
+//    その場合は例外として捕まえ、黙って次の検索先へ進む。
+// 2. Open Food Facts（食品）・Open Products Facts（日用品・洗剤など食品以外）
+//    どちらもAPIキー不要・CORS許可済みの無料オープンデータベース。食品かどうかで
+//    データが分かれているため、洗剤等は2を見る必要がある。
 // 価格は取得しない（ネット通販の価格は近所の店頭価格とは別物のため）。
 
 // 商品検索APIのClient ID（ID連携なし）。公開されても商品検索にしか使えない。
 const YAHOO_APP_ID = 'dmVyPTIwMjUwNyZpZD1wNTJ4c2ZNNnFNJmhhc2g9TXpCbU16TTNZakExTm1RME1tRXhNZw';
 
-export type LookupSource = 'yahoo' | 'openfoodfacts';
+export type LookupSource = 'yahoo' | 'openfoodfacts' | 'openproductsfacts';
 
 export const LOOKUP_SOURCE_LABELS: Record<LookupSource, string> = {
   yahoo: 'Yahoo!ショッピング',
   openfoodfacts: 'Open Food Facts',
+  openproductsfacts: 'Open Products Facts',
 };
 
 export interface ProductLookupResult {
@@ -121,9 +127,18 @@ async function lookupYahoo(jan: string, signal: AbortSignal): Promise<ProductLoo
   };
 }
 
-async function lookupOpenFoodFacts(jan: string, signal: AbortSignal): Promise<ProductLookupResult | null> {
+/**
+ * Open Food Facts と、そのきょうだいプロジェクトである Open Products Facts（食品以外の日用品）は
+ * 同じ Product Opener というソフトウェアで動いており、APIの形が共通。ホスト名だけ差し替えて使い回す。
+ */
+async function lookupOpenFactsFamily(
+  host: string,
+  source: 'openfoodfacts' | 'openproductsfacts',
+  jan: string,
+  signal: AbortSignal,
+): Promise<ProductLookupResult | null> {
   const url =
-    `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(jan)}.json` +
+    `https://${host}/api/v2/product/${encodeURIComponent(jan)}.json` +
     '?fields=product_name,product_name_ja,generic_name_ja,brands,quantity,product_quantity,product_quantity_unit';
   const res = await fetch(url, { signal });
   if (!res.ok) return null;
@@ -145,8 +160,16 @@ async function lookupOpenFoodFacts(jan: string, signal: AbortSignal): Promise<Pr
     brand,
     volume: parsed?.volume ?? null,
     volumeUnit: parsed?.unit ?? '',
-    source: 'openfoodfacts',
+    source,
   };
+}
+
+function lookupOpenFoodFacts(jan: string, signal: AbortSignal): Promise<ProductLookupResult | null> {
+  return lookupOpenFactsFamily('world.openfoodfacts.org', 'openfoodfacts', jan, signal);
+}
+
+function lookupOpenProductsFacts(jan: string, signal: AbortSignal): Promise<ProductLookupResult | null> {
+  return lookupOpenFactsFamily('world.openproductsfacts.org', 'openproductsfacts', jan, signal);
 }
 
 async function withTimeout<T>(fn: (signal: AbortSignal) => Promise<T>, timeoutMs: number): Promise<T | null> {
@@ -169,6 +192,7 @@ export async function lookupProductByJan(
 ): Promise<ProductLookupResult | null> {
   return (
     (await withTimeout((signal) => lookupYahoo(jan, signal), timeoutMs)) ??
-    (await withTimeout((signal) => lookupOpenFoodFacts(jan, signal), timeoutMs))
+    (await withTimeout((signal) => lookupOpenFoodFacts(jan, signal), timeoutMs)) ??
+    (await withTimeout((signal) => lookupOpenProductsFacts(jan, signal), timeoutMs))
   );
 }
