@@ -1,4 +1,11 @@
-import { findApplicableTaxRate, calculatePriceBreakdown, applyRounding } from '../src/lib/tax';
+import {
+  findApplicableTaxRate,
+  calculatePriceBreakdown,
+  applyRounding,
+  suggestTaxCategoryCode,
+  suggestTaxCategoryId,
+  listActiveRateOptions,
+} from '../src/lib/tax';
 import {
   resolveItemOptions,
   computeSingleStoreOptions,
@@ -6,7 +13,7 @@ import {
   computeUnlimitedOption,
   summarizeOptimization,
 } from '../src/lib/optimize';
-import type { TaxRate, PriceRecord, Product, Store, ShoppingListItem, UserSettings } from '../src/types';
+import type { TaxRate, TaxCategory, PriceRecord, Product, Store, ShoppingListItem, UserSettings } from '../src/types';
 
 let failures = 0;
 function check(name: string, condition: boolean, detail?: unknown) {
@@ -466,6 +473,130 @@ check(
   );
 
   globalThis.fetch = originalFetch;
+}
+
+// --- Category-based initial tax rate suggestion (8%/10% price-entry buttons) ---
+{
+  check('food category defaults to reduced (8%)', suggestTaxCategoryCode('牛乳') === 'reduced');
+  check('another food category defaults to reduced (8%)', suggestTaxCategoryCode('パン') === 'reduced');
+  check('daily-goods category defaults to standard (10%)', suggestTaxCategoryCode('洗剤') === 'standard');
+  check('laundry softener defaults to standard (10%)', suggestTaxCategoryCode('柔軟剤') === 'standard');
+  check('alcohol exception: ビール is standard (10%) despite being a drink', suggestTaxCategoryCode('ビール') === 'standard');
+  check('alcohol exception: 日本酒 is standard (10%)', suggestTaxCategoryCode('日本酒') === 'standard');
+  check('alcohol exception: ワイン is standard (10%)', suggestTaxCategoryCode('ワイン') === 'standard');
+  check('unknown/ambiguous category defaults to reduced (food-first assumption)', suggestTaxCategoryCode('お土産') === 'reduced');
+
+  const categories: TaxCategory[] = [
+    { taxCategoryId: 'tc-standard', code: 'standard', name: '標準税率対象', memo: '' },
+    { taxCategoryId: 'tc-reduced', code: 'reduced', name: '軽減税率対象', memo: '' },
+  ];
+  check('食品カテゴリー maps to the actual reduced taxCategoryId', suggestTaxCategoryId('牛乳', categories) === 'tc-reduced');
+  check('酒類カテゴリー maps to the actual standard taxCategoryId', suggestTaxCategoryId('ビール', categories) === 'tc-standard');
+}
+
+// --- Price-entry tax-rate quick-select buttons (listActiveRateOptions) ---
+{
+  const categories: TaxCategory[] = [
+    { taxCategoryId: 'tc-standard', code: 'standard', name: '標準税率対象', memo: '' },
+    { taxCategoryId: 'tc-reduced', code: 'reduced', name: '軽減税率対象', memo: '' },
+    { taxCategoryId: 'tc-exempt', code: 'exempt', name: '非課税', memo: '' },
+  ];
+  const rates: TaxRate[] = [
+    {
+      taxRateId: 'r-std-old',
+      taxCategoryId: 'tc-standard',
+      name: '標準税率(旧)',
+      rate: 0.1,
+      validFrom: '2019-10-01',
+      validTo: '2026-12-31',
+      isActive: true,
+      memo: '',
+    },
+    {
+      taxRateId: 'r-std-new',
+      taxCategoryId: 'tc-standard',
+      name: '標準税率(新)',
+      rate: 0.12,
+      validFrom: '2027-01-01',
+      validTo: null,
+      isActive: true,
+      memo: '',
+    },
+    {
+      taxRateId: 'r-reduced',
+      taxCategoryId: 'tc-reduced',
+      name: '軽減税率',
+      rate: 0.08,
+      validFrom: '2019-10-01',
+      validTo: null,
+      isActive: true,
+      memo: '',
+    },
+    {
+      taxRateId: 'r-exempt',
+      taxCategoryId: 'tc-exempt',
+      name: '非課税',
+      rate: 0,
+      validFrom: '2019-10-01',
+      validTo: null,
+      isActive: true,
+      memo: '',
+    },
+  ];
+  const before = listActiveRateOptions(categories, rates, '2026-06-01');
+  check(
+    'shows 0%/8%/10% buttons (sorted by rate) before the 2027 rate change',
+    before.length === 3 && before[0].rate === 0 && before[1].rate === 0.08 && before[2].rate === 0.1,
+    before,
+  );
+  const standardButton = before.find((o) => o.rate === 0.1);
+  check('the 10% button resolves to the standard tax category', standardButton?.taxCategoryId === 'tc-standard', standardButton);
+
+  const after = listActiveRateOptions(categories, rates, '2027-02-01');
+  check(
+    'buttons automatically follow a future tax-master change (10% -> 12%) with no code change',
+    after.some((o) => o.rate === 0.12) && !after.some((o) => o.rate === 0.1),
+    after,
+  );
+}
+
+// --- PriceFormModal-level override: the per-record tax category can differ from the
+// product's own default, without changing the product's tax category itself. ---
+{
+  const categories: TaxCategory[] = [
+    { taxCategoryId: 'tc-standard', code: 'standard', name: '標準税率対象', memo: '' },
+    { taxCategoryId: 'tc-reduced', code: 'reduced', name: '軽減税率対象', memo: '' },
+  ];
+  const rates: TaxRate[] = [
+    { taxRateId: 'r1', taxCategoryId: 'tc-standard', name: '標準税率', rate: 0.1, validFrom: '2019-10-01', validTo: null, isActive: true, memo: '' },
+    { taxRateId: 'r2', taxCategoryId: 'tc-reduced', name: '軽減税率', rate: 0.08, validFrom: '2019-10-01', validTo: null, isActive: true, memo: '' },
+  ];
+  // Product defaults to reduced (8%), but this one receipt shows it was rung up at
+  // standard (10%) -- overriding just this price record must not touch the product.
+  const overridden = calculatePriceBreakdown({
+    inputPrice: 198,
+    inputPriceType: 'tax_included',
+    taxCategoryId: 'tc-standard', // user overrode the chip from 8% to 10% for this entry
+    confirmedDate: '2026-01-01',
+    actualTaxIncludedPrice: null,
+    taxRates: rates,
+    roundingMethod: 'floor',
+  });
+  check('overriding the rate chip to 10% applies 10%, not the product default 8%', overridden.appliedTaxRate === 0.1, overridden);
+
+  // Tax comparison is always tax-included based (effectiveTaxIncludedPrice), confirmed
+  // in the existing analyzeProductPrices/priceAnalysis tests above; here just confirm
+  // the actual-price override still takes priority over the calculated value.
+  const withActual = calculatePriceBreakdown({
+    inputPrice: 198,
+    inputPriceType: 'tax_included',
+    taxCategoryId: 'tc-reduced',
+    confirmedDate: '2026-01-01',
+    actualTaxIncludedPrice: 195, // receipt showed a slightly different real total
+    taxRates: rates,
+    roundingMethod: 'floor',
+  });
+  check('actual receipt price is marked as "actual" (highest priority), not "calculated"', withActual.priceKind === 'actual', withActual);
 }
 
 console.log(`\n${failures === 0 ? 'ALL TESTS PASSED' : `${failures} TEST(S) FAILED`}`);

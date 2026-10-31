@@ -2,8 +2,8 @@ import { useMemo, useState } from 'react';
 import { Modal } from './Modal';
 import { SearchableSelect } from './SearchableSelect';
 import { useAppData } from '../state/AppDataContext';
-import { calculatePriceBreakdown } from '../lib/tax';
-import { formatYen } from '../lib/format';
+import { calculatePriceBreakdown, findApplicableTaxRate, listActiveRateOptions } from '../lib/tax';
+import { formatYen, formatPercent } from '../lib/format';
 import { generateId, todayISODate } from '../lib/id';
 import type { InputPriceType, PriceRecord, PriceType, Product } from '../types';
 
@@ -14,7 +14,7 @@ interface PriceFormModalProps {
 }
 
 export function PriceFormModal({ product, onClose, editingRecord }: PriceFormModalProps) {
-  const { stores, taxRates, userSettings, savePriceRecord } = useAppData();
+  const { stores, taxCategories, taxRates, userSettings, savePriceRecord } = useAppData();
   const [storeId, setStoreId] = useState(editingRecord?.storeId ?? stores[0]?.storeId ?? '');
   const [inputPrice, setInputPrice] = useState(editingRecord ? String(editingRecord.inputPrice) : '');
   const [inputPriceType, setInputPriceType] = useState<InputPriceType>(editingRecord?.inputPriceType ?? 'tax_included');
@@ -22,10 +22,24 @@ export function PriceFormModal({ product, onClose, editingRecord }: PriceFormMod
     editingRecord?.actualTaxIncludedPrice != null ? String(editingRecord.actualTaxIncludedPrice) : '',
   );
   const [confirmedDate, setConfirmedDate] = useState(editingRecord?.confirmedDate ?? todayISODate());
+  // この価格記録に適用する税区分。商品の税区分から初期値を決めるが、レシートの実際の税率が
+  // 違う場合などに備えてこの記録だけ上書きできる（商品側の税区分は変更しない）。
+  const [taxCategoryId, setTaxCategoryId] = useState(editingRecord?.taxCategoryId ?? product.taxCategoryId);
   const [priceType, setPriceType] = useState<PriceType>(editingRecord?.priceType ?? 'regular');
   const [saleStart, setSaleStart] = useState(editingRecord?.saleStartDate ?? '');
   const [saleEnd, setSaleEnd] = useState(editingRecord?.saleEndDate ?? '');
   const [memo, setMemo] = useState(editingRecord?.memo ?? '');
+
+  const effectiveDate = confirmedDate || todayISODate();
+
+  // 確認日時点で有効な税率を税区分ごとに一覧化し、「8%」「10%」のようなボタンにする。
+  // 表示されるパーセンテージは税率マスターから取得するため、将来税率が変わっても
+  // コードの変更なしにボタンの表示が自動的に追従する。
+  const rateOptions = useMemo(
+    () => listActiveRateOptions(taxCategories, taxRates, effectiveDate),
+    [taxCategories, taxRates, effectiveDate],
+  );
+  const currentRate = findApplicableTaxRate(taxRates, taxCategoryId, effectiveDate)?.rate ?? null;
 
   const preview = useMemo(() => {
     const price = Number(inputPrice);
@@ -33,13 +47,13 @@ export function PriceFormModal({ product, onClose, editingRecord }: PriceFormMod
     return calculatePriceBreakdown({
       inputPrice: price,
       inputPriceType,
-      taxCategoryId: product.taxCategoryId,
-      confirmedDate: confirmedDate || todayISODate(),
+      taxCategoryId,
+      confirmedDate: effectiveDate,
       actualTaxIncludedPrice: actualPrice ? Number(actualPrice) : null,
       taxRates,
       roundingMethod: userSettings.taxRoundingMethod,
     });
-  }, [inputPrice, inputPriceType, product.taxCategoryId, confirmedDate, actualPrice, taxRates, userSettings]);
+  }, [inputPrice, inputPriceType, taxCategoryId, effectiveDate, actualPrice, taxRates, userSettings]);
 
   function handleSave() {
     if (!storeId || !preview) return;
@@ -53,10 +67,10 @@ export function PriceFormModal({ product, onClose, editingRecord }: PriceFormMod
       taxAmount: preview.taxAmount,
       taxIncludedPrice: preview.taxIncludedPrice,
       appliedTaxRate: preview.appliedTaxRate,
-      taxCategoryId: product.taxCategoryId,
+      taxCategoryId,
       actualTaxIncludedPrice: actualPrice ? Number(actualPrice) : null,
       priceKind: preview.priceKind,
-      confirmedDate: confirmedDate || todayISODate(),
+      confirmedDate: effectiveDate,
       priceType,
       saleStartDate: priceType === 'sale' && saleStart ? saleStart : null,
       saleEndDate: priceType === 'sale' && saleEnd ? saleEnd : null,
@@ -114,6 +128,25 @@ export function PriceFormModal({ product, onClose, editingRecord }: PriceFormMod
               placeholder="198"
               autoFocus
             />
+          </div>
+
+          <div className="field">
+            <label>消費税率</label>
+            <div className="chip-group">
+              {rateOptions.map((option) => (
+                <button
+                  key={option.taxCategoryId}
+                  type="button"
+                  className={`chip ${currentRate === option.rate ? 'active' : ''}`}
+                  onClick={() => setTaxCategoryId(option.taxCategoryId)}
+                >
+                  {formatPercent(option.rate)}
+                </button>
+              ))}
+            </div>
+            <p className="muted" style={{ marginTop: 4 }}>
+              商品の税区分から自動選択しています。レシートと違う場合はここで変更できます（この価格記録だけに適用され、商品の設定自体は変わりません）。
+            </p>
           </div>
 
           {preview && (

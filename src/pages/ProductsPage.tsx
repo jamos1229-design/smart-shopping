@@ -9,6 +9,7 @@ import type { Category, ComparisonUnit, Product } from '../types';
 import { COMPARISON_UNIT_LABELS } from '../lib/unitPrice';
 import { sameJan, normalizeJan } from '../lib/jan';
 import { matchesQuery, splitQuery } from '../lib/search';
+import { suggestTaxCategoryId } from '../lib/tax';
 import {
   lookupProductByJan,
   LOOKUP_SOURCE_LABELS,
@@ -117,9 +118,12 @@ export function ProductsPage() {
   const [scanMode, setScanMode] = useState<ScanMode | null>(null);
   const [lookupNotice, setLookupNotice] = useState<LookupNotice>(null);
 
-  const defaultTaxCategoryId = taxCategories.find((t) => t.code === 'reduced')?.taxCategoryId ?? '';
-
   const categoryName = (id: string) => categories.find((c) => c.categoryId === id)?.name ?? '未分類';
+
+  /** 新規商品作成時の初期税区分をカテゴリー名から提案する（手動で後から変更可能） */
+  function suggestedTaxCategoryIdFor(categoryId: string): string {
+    return suggestTaxCategoryId(categoryName(categoryId), taxCategories);
+  }
 
   const categoryNameById = useMemo(() => new Map(categories.map((c) => [c.categoryId, c.name])), [categories]);
 
@@ -225,7 +229,10 @@ export function ProductsPage() {
       return;
     }
     const fresh = {
-      ...emptyProduct(categoryFilter !== 'all' ? categoryFilter : (categories[0]?.categoryId ?? ''), defaultTaxCategoryId),
+      ...emptyProduct(
+        categoryFilter !== 'all' ? categoryFilter : (categories[0]?.categoryId ?? ''),
+        suggestedTaxCategoryIdFor(categoryFilter !== 'all' ? categoryFilter : (categories[0]?.categoryId ?? '')),
+      ),
       janCode: jan,
     };
     setEditingProduct(fresh);
@@ -377,14 +384,10 @@ export function ProductsPage() {
               className="toolbar-btn toolbar-btn-primary"
               aria-label="商品を追加"
               disabled={categories.length === 0}
-              onClick={() =>
-                setEditingProduct(
-                  emptyProduct(
-                    categoryFilter !== 'all' ? categoryFilter : (categories[0]?.categoryId ?? ''),
-                    defaultTaxCategoryId,
-                  ),
-                )
-              }
+              onClick={() => {
+                const categoryId = categoryFilter !== 'all' ? categoryFilter : (categories[0]?.categoryId ?? '');
+                setEditingProduct(emptyProduct(categoryId, suggestedTaxCategoryIdFor(categoryId)));
+              }}
             >
               ＋
             </button>
@@ -467,15 +470,13 @@ export function ProductsPage() {
                   type="button"
                   className="btn btn-secondary btn-sm"
                   style={{ marginTop: 8 }}
-                  onClick={() =>
+                  onClick={() => {
+                    const categoryId = categoryFilter !== 'all' ? categoryFilter : (categories[0]?.categoryId ?? '');
                     setEditingProduct({
-                      ...emptyProduct(
-                        categoryFilter !== 'all' ? categoryFilter : (categories[0]?.categoryId ?? ''),
-                        defaultTaxCategoryId,
-                      ),
+                      ...emptyProduct(categoryId, suggestedTaxCategoryIdFor(categoryId)),
                       name: query.trim(),
-                    })
-                  }
+                    });
+                  }}
                 >
                   ＋「{query.trim()}」を新しく登録
                 </button>
