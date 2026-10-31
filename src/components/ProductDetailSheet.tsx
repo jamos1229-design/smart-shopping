@@ -7,6 +7,7 @@ import { computeUnitPrice, COMPARISON_UNIT_LABELS } from '../lib/unitPrice';
 import { effectiveTaxIncludedPrice } from '../lib/tax';
 import { formatYen, formatDate } from '../lib/format';
 import { generateId } from '../lib/id';
+import { LOOKUP_SOURCE_LABELS, type LookupSource } from '../lib/productLookup';
 import type { PriceRecord, Product } from '../types';
 
 interface ProductDetailSheetProps {
@@ -51,6 +52,15 @@ export function ProductDetailSheet({ productId, onClose, onEdit, onDelete }: Pro
         {product.manufacturer ? ` ・ ${product.manufacturer}` : ''}
         {product.volume ? ` ・ ${product.volume}${product.volumeUnit}` : ''}
         {product.quantity ? ` × ${product.quantity}` : ''}
+      </p>
+      <p style={{ marginBottom: 10 }}>
+        {product.autoFilledFrom && product.autoFilledFrom in LOOKUP_SOURCE_LABELS ? (
+          <span className="badge badge-accent">
+            🔎 {LOOKUP_SOURCE_LABELS[product.autoFilledFrom as LookupSource]}から自動入力
+          </span>
+        ) : (
+          <span className="badge">✏️ 手入力</span>
+        )}
       </p>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>

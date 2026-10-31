@@ -55,6 +55,8 @@ export interface Product {
   janCode: string;
   taxCategoryId: ID;
   memo: string;
+  /** 商品データベースから自動入力された場合の取得元。手入力のみの場合はnull。 */
+  autoFilledFrom: string | null;
 }
 
 export type TaxCategoryCode = 'standard' | 'reduced' | 'exempt' | 'other';

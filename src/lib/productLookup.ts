@@ -1,11 +1,17 @@
 // JANコードから商品名・メーカー・容量を外部データベースで調べる。
-// 1. Yahoo!ショッピング 商品検索API（日本の商品に強い）
-//    ただしこのAPIはサーバー間通信向けで、ブラウザから直接呼ぶとCORSで
-//    ブロックされる環境がある（本アプリはサーバーを持たない静的サイトのため該当しうる）。
-//    その場合は例外として捕まえ、黙って次の検索先へ進む。
-// 2. Open Food Facts（食品）・Open Products Facts（日用品・洗剤など食品以外）
-//    どちらもAPIキー不要・CORS許可済みの無料オープンデータベース。食品かどうかで
-//    データが分かれているため、洗剤等は2を見る必要がある。
+//
+// 検索先（この順で試し、見つかった時点で確定）:
+// 1. Open Food Facts（食品）・2. Open Products Facts（日用品・洗剤など食品以外）
+//    どちらもAPIキー不要・CORS許可済みの無料オープンデータベース。確実に繋がるためまず試す。
+// 3. Yahoo!ショッピング 商品検索API（日本の商品に強いが、サーバー間通信向けのAPIで
+//    ブラウザから直接呼ぶとCORSでブロックされる可能性が高い。本アプリはサーバーを
+//    持たない静的サイトのためほぼ確実に失敗するが、将来CORSが許可された場合や
+//    別環境での動作に備えて最後に一応試す。失敗しても他の2つより待たせないよう
+//    タイムアウトは短めにしてある）。
+//
+// 各検索先の結果（見つかった／見つからない／通信エラー／HTTPエラー）は
+// LookupAttempt として記録し、呼び出し側で「どこまで試して、なぜ失敗したか」を
+// 画面に出せるようにしている。情報が取れなかった項目は推測で埋めない。
 // 価格は取得しない（ネット通販の価格は近所の店頭価格とは別物のため）。
 
 // 商品検索APIのClient ID（ID連携なし）。公開されても商品検索にしか使えない。
@@ -26,6 +32,23 @@ export interface ProductLookupResult {
   volumeUnit: string;
   source: LookupSource;
 }
+
+export type LookupOutcome = 'found' | 'not_found' | 'http_error' | 'network_error' | 'timeout';
+
+export interface LookupAttempt {
+  source: LookupSource;
+  outcome: LookupOutcome;
+  httpStatus?: number;
+  elapsedMs: number;
+}
+
+export const LOOKUP_OUTCOME_LABELS: Record<LookupOutcome, string> = {
+  found: '見つかりました',
+  not_found: 'この検索先にはありませんでした',
+  http_error: 'APIがエラーを返しました',
+  network_error: '通信できませんでした（CORS制限の可能性があります）',
+  timeout: '応答がありませんでした（タイムアウト）',
+};
 
 interface OffProduct {
   product_name_ja?: string;
@@ -94,19 +117,24 @@ interface YahooHit {
   brand?: { name?: string };
 }
 
-async function lookupYahoo(jan: string, signal: AbortSignal): Promise<ProductLookupResult | null> {
+type SourceOutcome =
+  | { kind: 'found'; result: ProductLookupResult }
+  | { kind: 'not_found' }
+  | { kind: 'http_error'; status: number };
+
+async function lookupYahoo(jan: string, signal: AbortSignal): Promise<SourceOutcome> {
   const url =
     'https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch' +
     `?appid=${encodeURIComponent(YAHOO_APP_ID)}&jan_code=${encodeURIComponent(jan)}&results=10`;
   const res = await fetch(url, { signal });
-  if (!res.ok) return null;
+  if (!res.ok) return { kind: 'http_error', status: res.status };
   const data = (await res.json()) as { hits?: YahooHit[] };
   const hits = (data.hits ?? []).filter((h) => h.name);
-  if (hits.length === 0) return null;
+  if (hits.length === 0) return { kind: 'not_found' };
 
   // 店ごとに名前がばらつくので、整形後いちばん短い名前を採用（販促文言が少ない）
   const names = hits.map((h) => cleanShoppingItemName(h.name ?? '')).filter((n) => n.length >= 2);
-  if (names.length === 0) return null;
+  if (names.length === 0) return { kind: 'not_found' };
   const name = names.reduce((a, b) => (b.length < a.length ? b : a));
 
   // ブランドは最も多く出てくるものを採用
@@ -119,11 +147,14 @@ async function lookupYahoo(jan: string, signal: AbortSignal): Promise<ProductLoo
 
   const parsed = parseQuantity(name) ?? names.map((n) => parseQuantity(n)).find((q) => q) ?? null;
   return {
-    name,
-    brand,
-    volume: parsed?.volume ?? null,
-    volumeUnit: parsed?.unit ?? '',
-    source: 'yahoo',
+    kind: 'found',
+    result: {
+      name,
+      brand,
+      volume: parsed?.volume ?? null,
+      volumeUnit: parsed?.unit ?? '',
+      source: 'yahoo',
+    },
   };
 }
 
@@ -136,14 +167,14 @@ async function lookupOpenFactsFamily(
   source: 'openfoodfacts' | 'openproductsfacts',
   jan: string,
   signal: AbortSignal,
-): Promise<ProductLookupResult | null> {
+): Promise<SourceOutcome> {
   const url =
     `https://${host}/api/v2/product/${encodeURIComponent(jan)}.json` +
     '?fields=product_name,product_name_ja,generic_name_ja,brands,quantity,product_quantity,product_quantity_unit';
   const res = await fetch(url, { signal });
-  if (!res.ok) return null;
+  if (!res.ok) return { kind: 'http_error', status: res.status };
   const data = (await res.json()) as { status?: number; product?: OffProduct };
-  if (data.status !== 1 || !data.product) return null;
+  if (data.status !== 1 || !data.product) return { kind: 'not_found' };
 
   const p = data.product;
   const name = pickName(p);
@@ -154,45 +185,71 @@ async function lookupOpenFactsFamily(
       ? parseQuantity(`${p.product_quantity} ${p.product_quantity_unit}`)
       : null);
 
-  if (!name && !brand && !parsed) return null;
+  if (!name && !brand && !parsed) return { kind: 'not_found' };
   return {
-    name,
-    brand,
-    volume: parsed?.volume ?? null,
-    volumeUnit: parsed?.unit ?? '',
-    source,
+    kind: 'found',
+    result: { name, brand, volume: parsed?.volume ?? null, volumeUnit: parsed?.unit ?? '', source },
   };
 }
 
-function lookupOpenFoodFacts(jan: string, signal: AbortSignal): Promise<ProductLookupResult | null> {
+function lookupOpenFoodFacts(jan: string, signal: AbortSignal): Promise<SourceOutcome> {
   return lookupOpenFactsFamily('world.openfoodfacts.org', 'openfoodfacts', jan, signal);
 }
 
-function lookupOpenProductsFacts(jan: string, signal: AbortSignal): Promise<ProductLookupResult | null> {
+function lookupOpenProductsFacts(jan: string, signal: AbortSignal): Promise<SourceOutcome> {
   return lookupOpenFactsFamily('world.openproductsfacts.org', 'openproductsfacts', jan, signal);
 }
 
-async function withTimeout<T>(fn: (signal: AbortSignal) => Promise<T>, timeoutMs: number): Promise<T | null> {
+async function runSource(
+  source: LookupSource,
+  fn: (signal: AbortSignal) => Promise<SourceOutcome>,
+  timeoutMs: number,
+): Promise<{ attempt: LookupAttempt; result: ProductLookupResult | null }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
   try {
-    return await fn(controller.signal);
+    const outcome = await fn(controller.signal);
+    const elapsedMs = Date.now() - startedAt;
+    if (outcome.kind === 'found') {
+      return { attempt: { source, outcome: 'found', elapsedMs }, result: outcome.result };
+    }
+    if (outcome.kind === 'http_error') {
+      return { attempt: { source, outcome: 'http_error', httpStatus: outcome.status, elapsedMs }, result: null };
+    }
+    return { attempt: { source, outcome: 'not_found', elapsedMs }, result: null };
   } catch (err) {
-    // オフライン・タイムアウト・CORS等は「見つからない」扱い
-    console.warn('[productLookup]', err);
-    return null;
+    const elapsedMs = Date.now() - startedAt;
+    const isAbort = err instanceof DOMException && err.name === 'AbortError';
+    console.warn('[productLookup]', source, err);
+    return { attempt: { source, outcome: isAbort ? 'timeout' : 'network_error', elapsedMs }, result: null };
   } finally {
     clearTimeout(timer);
   }
 }
 
-export async function lookupProductByJan(
-  jan: string,
-  { timeoutMs = 6000 }: { timeoutMs?: number } = {},
-): Promise<ProductLookupResult | null> {
-  return (
-    (await withTimeout((signal) => lookupYahoo(jan, signal), timeoutMs)) ??
-    (await withTimeout((signal) => lookupOpenFoodFacts(jan, signal), timeoutMs)) ??
-    (await withTimeout((signal) => lookupOpenProductsFacts(jan, signal), timeoutMs))
-  );
+export interface JanLookupReport {
+  result: ProductLookupResult | null;
+  attempts: LookupAttempt[];
+}
+
+/**
+ * 確実に繋がる（CORS許可済みの）検索先から先に試し、
+ * サーバー間通信向けで繋がらない可能性が高いYahooは最後に短いタイムアウトで一応試す。
+ * 見つかった時点でそれ以降の検索先は呼ばない。
+ */
+export async function lookupProductByJan(jan: string): Promise<JanLookupReport> {
+  const plan: { source: LookupSource; fn: (signal: AbortSignal) => Promise<SourceOutcome>; timeoutMs: number }[] = [
+    { source: 'openfoodfacts', fn: (s) => lookupOpenFoodFacts(jan, s), timeoutMs: 6000 },
+    { source: 'openproductsfacts', fn: (s) => lookupOpenProductsFacts(jan, s), timeoutMs: 6000 },
+    { source: 'yahoo', fn: (s) => lookupYahoo(jan, s), timeoutMs: 3000 },
+  ];
+
+  const attempts: LookupAttempt[] = [];
+  for (const step of plan) {
+    const { attempt, result } = await runSource(step.source, step.fn, step.timeoutMs);
+    attempts.push(attempt);
+    if (result) return { result, attempts };
+  }
+  return { result: null, attempts };
 }

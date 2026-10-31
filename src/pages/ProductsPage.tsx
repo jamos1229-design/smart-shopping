@@ -9,7 +9,13 @@ import type { Category, ComparisonUnit, Product } from '../types';
 import { COMPARISON_UNIT_LABELS } from '../lib/unitPrice';
 import { sameJan, normalizeJan } from '../lib/jan';
 import { matchesQuery, splitQuery } from '../lib/search';
-import { lookupProductByJan, LOOKUP_SOURCE_LABELS, type LookupSource, type ProductLookupResult } from '../lib/productLookup';
+import {
+  lookupProductByJan,
+  LOOKUP_SOURCE_LABELS,
+  LOOKUP_OUTCOME_LABELS,
+  type LookupAttempt,
+  type ProductLookupResult,
+} from '../lib/productLookup';
 
 function emptyProduct(categoryId: string, taxCategoryId: string): Product {
   return {
@@ -26,6 +32,7 @@ function emptyProduct(categoryId: string, taxCategoryId: string): Product {
     janCode: '',
     taxCategoryId,
     memo: '',
+    autoFilledFrom: null,
   };
 }
 
@@ -51,6 +58,7 @@ function applyLookup(product: Product, result: ProductLookupResult): Product {
     next.volumeUnit = result.volumeUnit || next.volumeUnit;
     next.comparisonUnit = UNIT_TO_COMPARISON[next.volumeUnit] ?? next.comparisonUnit;
   }
+  next.autoFilledFrom = result.source;
   return next;
 }
 
@@ -62,7 +70,27 @@ const SORT_LABELS: Record<SortKey, string> = {
   recentPrice: '価格を最近登録した順',
   added: '新しく追加した順',
 };
-type LookupNotice = { productId: string; kind: 'loading' | 'found' | 'notfound'; source?: LookupSource } | null;
+type LookupNotice = {
+  productId: string;
+  kind: 'loading' | 'found' | 'notfound';
+  source?: ProductLookupResult['source'];
+  attempts?: LookupAttempt[];
+} | null;
+
+/** 検索先ごとの結果（見つかった／見つからない／通信エラー等）を一覧表示する */
+function AttemptLog({ attempts }: { attempts: LookupAttempt[] }) {
+  return (
+    <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 13 }}>
+      {attempts.map((a) => (
+        <li key={a.source}>
+          {LOOKUP_SOURCE_LABELS[a.source]}: {LOOKUP_OUTCOME_LABELS[a.outcome]}
+          {a.httpStatus ? `（HTTP ${a.httpStatus}）` : ''}
+          {` ・ ${a.elapsedMs}ms`}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export function ProductsPage() {
   const {
@@ -164,10 +192,10 @@ export function ProductsPage() {
 
   async function runLookup(productId: string, jan: string) {
     setLookupNotice({ productId, kind: 'loading' });
-    const result = await lookupProductByJan(jan);
+    const { result, attempts } = await lookupProductByJan(jan);
     setLookupNotice((prev) =>
       prev && prev.productId === productId
-        ? { productId, kind: result ? 'found' : 'notfound', source: result?.source }
+        ? { productId, kind: result ? 'found' : 'notfound', source: result?.source, attempts }
         : prev,
     );
     if (!result) return;
@@ -532,11 +560,23 @@ export function ProductsPage() {
                   </a>
                 </div>
               )}
+              {notice.attempts && notice.attempts.length > 1 && (
+                <details style={{ marginTop: 6 }}>
+                  <summary>検索の詳細（{notice.attempts.length}件試行）</summary>
+                  <AttemptLog attempts={notice.attempts} />
+                </details>
+              )}
             </div>
           )}
           {notice?.kind === 'notfound' && (
             <div className="notice notice-warn">
               商品データベースに見つかりませんでした。商品名などを入力してください。次からはこのバーコードで呼び出せます。
+              {notice.attempts && notice.attempts.length > 0 && (
+                <details style={{ marginTop: 6 }} open>
+                  <summary>見つからなかった理由（{notice.attempts.length}件の検索先を確認）</summary>
+                  <AttemptLog attempts={notice.attempts} />
+                </details>
+              )}
             </div>
           )}
           <div className="field">
